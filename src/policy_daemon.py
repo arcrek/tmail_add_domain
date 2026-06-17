@@ -64,11 +64,11 @@ def main() -> None:
         _cache.add_many(existing)
         logger.info("Pre-loaded %d domains from Stalwart", len(existing))
 
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
     server = socketserver.ThreadingTCPServer(
         (_config.listen_addr, _config.listen_port),
         PolicyHandler,
     )
-    server.allow_reuse_address = True
     logger.info("Listening on %s:%d", _config.listen_addr, _config.listen_port)
     try:
         server.serve_forever()
