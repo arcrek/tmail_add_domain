@@ -43,8 +43,13 @@ class JmapClient:
             resp = httpx.post(self._url, json=payload, headers=self._headers, timeout=10)
             resp.raise_for_status()
             method_resp = resp.json().get("methodResponses", [[]])[0]
-            if method_resp[0] == "x:Domain/set" and "new-0" in method_resp[1].get("created", {}):
-                return True
+            if method_resp[0] == "x:Domain/set":
+                data = method_resp[1]
+                if "new-0" in data.get("created", {}):
+                    return True
+                not_created = data.get("notCreated", {}).get("new-0", {})
+                if not_created.get("type") == "alreadyExists":
+                    return True
             logger.error("JMAP provision failed for %s: %s", domain, method_resp)
             return False
         except Exception as exc:

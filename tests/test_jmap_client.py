@@ -21,9 +21,14 @@ def test_provision_domain_success():
         assert CLIENT.provision_domain("newdomain.com") is True
 
 def test_provision_domain_jmap_not_created():
-    resp = {"methodResponses": [["x:Domain/set", {"notCreated": {"new-0": {"type": "alreadyExists"}}}, "0"]]}
+    resp = {"methodResponses": [["x:Domain/set", {"notCreated": {"new-0": {"type": "serverFail"}}}, "0"]]}
     with patch("src.jmap_client.httpx.post", return_value=_mock_response(resp)):
         assert CLIENT.provision_domain("newdomain.com") is False
+
+def test_provision_domain_already_exists_returns_true():
+    resp = {"methodResponses": [["x:Domain/set", {"notCreated": {"new-0": {"type": "alreadyExists"}}}, "0"]]}
+    with patch("src.jmap_client.httpx.post", return_value=_mock_response(resp)):
+        assert CLIENT.provision_domain("newdomain.com") is True
 
 def test_provision_domain_network_error():
     with patch("src.jmap_client.httpx.post", side_effect=Exception("connection refused")):

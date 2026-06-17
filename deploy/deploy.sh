@@ -2,10 +2,12 @@
 set -euo pipefail
 
 SERVER="${1:?Usage: ./deploy.sh user@hostname}"
+[ -f config.json ] || { echo "ERROR: config.json not found. Copy config.example.json to config.json and fill in your API token first."; exit 1; }
 REMOTE_DIR="/opt/tmail-policy"
 
 echo "==> Installing Python dependencies on remote"
-ssh "$SERVER" "pip3 install dnspython httpx"
+scp requirements.txt "$SERVER:/tmp/tmail-requirements.txt"
+ssh "$SERVER" "pip3 install -r /tmp/tmail-requirements.txt"
 
 echo "==> Creating remote directories"
 ssh "$SERVER" "mkdir -p $REMOTE_DIR /var/lib/tmail-policy"

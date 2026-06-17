@@ -1,1 +1,1 @@
-*    OK
+/^[a-zA-Z0-9.-]+$/    virtual
