@@ -33,10 +33,41 @@ echo "==> Setting permissions"
 chown -R tmail-policy:tmail-policy "$REMOTE_DIR" /var/lib/tmail-policy
 chmod 600 "$REMOTE_DIR/config.json"
 
-echo "==> Enabling and starting service"
+echo "==> Enabling and starting policy daemon"
 systemctl daemon-reload
 systemctl enable tmail-policy
 systemctl restart tmail-policy
 
 echo "==> Status"
 systemctl status tmail-policy --no-pager -l
+
+# ── Postfix setup ──────────────────────────────────────────────────────────────
+
+echo "==> Installing Postfix"
+DEBIAN_FRONTEND=noninteractive apt-get install -y postfix
+
+echo "==> Backing up /etc/postfix/main.cf"
+cp /etc/postfix/main.cf /etc/postfix/main.cf.bak
+
+echo "==> Applying tmail-policy config snippet"
+# Remove any previous tmail-policy block to keep install idempotent
+sed -i '/# --- tmail-policy additions ---/,/# --- end tmail-policy additions ---/d' /etc/postfix/main.cf
+cat deploy/postfix_main_snippet.cf >> /etc/postfix/main.cf
+
+echo "==> Installing accepted_domains PCRE map"
+cp deploy/accepted_domains /etc/postfix/accepted_domains
+
+echo "==> Validating Postfix config"
+postfix check
+
+echo "==> Restarting Postfix"
+systemctl restart postfix
+systemctl status postfix --no-pager -l
+
+echo ""
+echo "==> MANUAL STEP REQUIRED: move Stalwart off port 25"
+echo "    Postfix now owns :25. If Stalwart still binds 0.0.0.0:25, they will conflict."
+echo "    Edit your Stalwart config and change its SMTP listener to 127.0.0.1:25 (or disable it)."
+echo "    Confirm LMTP listener is enabled on 127.0.0.1:24."
+echo "    Then: systemctl restart stalwart-mail"
+echo "    Verify: ss -tlnp | grep -E ':25|:24'"
