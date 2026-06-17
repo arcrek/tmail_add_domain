@@ -1,0 +1,26 @@
+# --- tmail-policy additions ---
+myhostname = mail.tm-mails.com
+mydomain = tm-mails.com
+myorigin = $myhostname
+
+inet_interfaces = all
+inet_protocols = ipv4
+
+# Postfix does not own local delivery — Stalwart does
+mydestination =
+local_recipient_maps =
+local_transport = error:local delivery disabled
+
+# Forward accepted mail to Stalwart via LMTP
+virtual_transport = lmtp:127.0.0.1:24
+virtual_mailbox_domains = /etc/postfix/accepted_domains
+
+mynetworks = 127.0.0.0/8
+relay_domains =
+
+# Policy daemon
+smtpd_recipient_restrictions =
+    permit_mynetworks,
+    check_policy_service inet:127.0.0.1:10030,
+    permit
+# --- end tmail-policy additions ---

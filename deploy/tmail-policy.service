@@ -1,0 +1,16 @@
+[Unit]
+Description=Tmail Policy Daemon
+After=network.target
+
+[Service]
+User=tmail-policy
+WorkingDirectory=/opt/tmail-policy
+Environment=TMAIL_CONFIG=/opt/tmail-policy/config.json
+ExecStart=/usr/bin/python3 -m src.policy_daemon
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
