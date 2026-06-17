@@ -1,0 +1,9 @@
+{
+  "jmap_url": "https://mail.tm-mails.com/jmap/",
+  "jmap_token": "REPLACE_WITH_YOUR_API_TOKEN",
+  "mx_hostname": "mail.tm-mails.com",
+  "catchall_address": "admin@mail.tm-mails.com",
+  "listen_addr": "127.0.0.1",
+  "listen_port": 10030,
+  "cache_file": "/var/lib/tmail-policy/domains.json"
+}
