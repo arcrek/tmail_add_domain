@@ -45,6 +45,10 @@ systemctl status tmail-policy --no-pager -l
 # ── Postfix setup ──────────────────────────────────────────────────────────────
 
 echo "==> Installing Postfix"
+# Pre-set debconf so the post-install script uses a valid hostname, not the VPS default
+POSTFIX_HOSTNAME=$(grep '^myhostname' deploy/postfix_main_snippet.cf | awk '{print $3}')
+echo "postfix postfix/main_mailer_type select Internet Site" | debconf-set-selections
+echo "postfix postfix/mailname string ${POSTFIX_HOSTNAME}" | debconf-set-selections
 DEBIAN_FRONTEND=noninteractive apt-get install -y postfix
 
 echo "==> Backing up /etc/postfix/main.cf"
