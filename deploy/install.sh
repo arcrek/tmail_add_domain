@@ -45,8 +45,18 @@ systemctl status tmail-policy --no-pager -l
 # ── Postfix setup ──────────────────────────────────────────────────────────────
 
 echo "==> Installing Postfix"
-# Pre-set debconf so the post-install script uses a valid hostname, not the VPS default
 POSTFIX_HOSTNAME=$(grep '^myhostname' deploy/postfix_main_snippet.cf | awk '{print $3}')
+POSTFIX_DOMAIN=$(grep '^mydomain' deploy/postfix_main_snippet.cf | awk '{print $3}')
+
+# Write /etc/mailname before apt runs so the post-install script uses the right hostname
+echo "$POSTFIX_HOSTNAME" > /etc/mailname
+
+# If a broken previous install left a bad main.cf, patch it so dpkg --configure succeeds
+if [ -f /etc/postfix/main.cf ]; then
+    sed -i "s/^myhostname = .*/myhostname = ${POSTFIX_HOSTNAME}/" /etc/postfix/main.cf
+    sed -i "s/^mydomain = .*/mydomain = ${POSTFIX_DOMAIN}/" /etc/postfix/main.cf
+fi
+
 echo "postfix postfix/main_mailer_type select Internet Site" | debconf-set-selections
 echo "postfix postfix/mailname string ${POSTFIX_HOSTNAME}" | debconf-set-selections
 DEBIAN_FRONTEND=noninteractive apt-get install -y postfix
