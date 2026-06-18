@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run this script directly on the VPS from the project root.
-# Must be run as root: sudo bash deploy/install.sh
+# Must be run as root: sudo bash deploy/install.sh  (or: sh deploy/install.sh)
+[ -n "$BASH_VERSION" ] || exec bash "$0" "$@"
 set -euo pipefail
 
 REMOTE_DIR="/opt/tmail-policy"
