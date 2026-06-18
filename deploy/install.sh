@@ -44,7 +44,7 @@ systemctl status tmail-policy --no-pager -l
 
 # ── Postfix setup ──────────────────────────────────────────────────────────────
 
-echo "==> Installing Postfix"
+echo "==> Installing Postfix and PCRE support"
 POSTFIX_HOSTNAME=$(grep '^myhostname' deploy/postfix_main_snippet.cf | awk '{print $3}')
 POSTFIX_DOMAIN=$(grep '^mydomain' deploy/postfix_main_snippet.cf | awk '{print $3}')
 
@@ -59,13 +59,16 @@ fi
 
 echo "postfix postfix/main_mailer_type select Internet Site" | debconf-set-selections
 echo "postfix postfix/mailname string ${POSTFIX_HOSTNAME}" | debconf-set-selections
-DEBIAN_FRONTEND=noninteractive apt-get install -y postfix
+DEBIAN_FRONTEND=noninteractive apt-get install -y postfix postfix-pcre
 
 echo "==> Backing up /etc/postfix/main.cf"
 cp /etc/postfix/main.cf /etc/postfix/main.cf.bak
 
 echo "==> Installing accepted_domains PCRE map"
 cp deploy/accepted_domains /etc/postfix/accepted_domains
+
+echo "==> Cleaning up any duplicate keys from previous installs"
+awk '!seen[$1]++' /etc/postfix/main.cf > /tmp/main.cf.dedup && mv /tmp/main.cf.dedup /etc/postfix/main.cf
 
 echo "==> Applying Postfix config (postconf -e, no duplicates)"
 postconf -e \
