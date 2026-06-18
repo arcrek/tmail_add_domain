@@ -45,8 +45,8 @@ systemctl status tmail-policy --no-pager -l
 # ── Postfix setup ──────────────────────────────────────────────────────────────
 
 echo "==> Installing Postfix and PCRE support"
-POSTFIX_HOSTNAME=$(grep '^myhostname' deploy/postfix_main_snippet.cf | awk '{print $3}')
-POSTFIX_DOMAIN=$(grep '^mydomain' deploy/postfix_main_snippet.cf | awk '{print $3}')
+POSTFIX_HOSTNAME=$(python3 -c "import json; print(json.load(open('config.json'))['mx_hostname'])")
+POSTFIX_DOMAIN=$(echo "$POSTFIX_HOSTNAME" | cut -d. -f2-)
 
 # Write /etc/mailname before apt runs so the post-install script uses the right hostname
 echo "$POSTFIX_HOSTNAME" > /etc/mailname

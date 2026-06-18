@@ -1,6 +1,6 @@
 # --- tmail-policy additions ---
-myhostname = mail.tm-mails.com
-mydomain = tm-mails.com
+myhostname = {{MX_HOSTNAME}}          # from config.json: mx_hostname
+mydomain = {{MX_DOMAIN}}             # derived: mx_hostname with first label stripped
 myorigin = $myhostname
 
 inet_interfaces = all
