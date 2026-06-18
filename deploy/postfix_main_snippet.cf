@@ -11,8 +11,8 @@ mydestination =
 local_recipient_maps =
 local_transport = error:local delivery disabled
 
-# Forward accepted mail to Stalwart via LMTP
-virtual_transport = lmtp:127.0.0.1:24
+# Forward accepted mail to Stalwart via SMTP
+virtual_transport = smtp:127.0.0.1:2525
 virtual_mailbox_domains = pcre:/etc/postfix/accepted_domains
 
 mynetworks = 127.0.0.0/8

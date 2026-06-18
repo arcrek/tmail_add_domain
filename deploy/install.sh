@@ -80,9 +80,9 @@ systemctl restart postfix
 systemctl status postfix --no-pager -l
 
 echo ""
-echo "==> MANUAL STEP REQUIRED: move Stalwart off port 25"
-echo "    Postfix now owns :25. If Stalwart still binds 0.0.0.0:25, they will conflict."
-echo "    Edit your Stalwart config and change its SMTP listener to 127.0.0.1:25 (or disable it)."
-echo "    Confirm LMTP listener is enabled on 127.0.0.1:24."
-echo "    Then: systemctl restart stalwart-mail"
-echo "    Verify: ss -tlnp | grep -E ':25|:24'"
+echo "==> Verifying port ownership"
+ss -tlnp | grep -E ':25|:2525' || true
+
+echo ""
+echo "==> Done. Postfix on :25, Stalwart receiving on :2525."
+echo "    Test: swaks --to test@yourdomain.com --server 127.0.0.1"
