@@ -90,8 +90,27 @@ echo "==> Validating Postfix config"
 postfix check
 
 echo "==> Restarting Postfix"
+systemctl enable 'postfix@-.service'   # instance unit is enabled-runtime by default; make it permanent
 systemctl restart postfix
 systemctl status postfix --no-pager -l
+
+# ── Stalwart coexistence fix ───────────────────────────────────────────────────
+# Stalwart's default unit has Conflicts=postfix.service, which causes systemd to
+# send SIGINT to Stalwart every time Postfix starts.  Remove that conflict (the
+# port clash it guarded against is gone — Stalwart listens on 2525, not 25) and
+# add Wants=network-online.target so port binding waits for the NIC.
+
+STALWART_UNIT=/etc/systemd/system/stalwart.service
+if [ -f "$STALWART_UNIT" ]; then
+    echo "==> Patching $STALWART_UNIT (remove Conflicts=postfix, add Wants=network-online)"
+    sed -i 's/Conflicts=postfix\.service //' "$STALWART_UNIT"
+    sed -i 's/Conflicts=postfix\.service$//' "$STALWART_UNIT"
+    grep -q 'Wants=network-online.target' "$STALWART_UNIT" || \
+        sed -i '/^After=network-online.target/a Wants=network-online.target' "$STALWART_UNIT"
+    systemctl daemon-reload
+    systemctl restart stalwart
+    systemctl status stalwart --no-pager -l
+fi
 
 echo ""
 echo "==> Verifying port ownership"
