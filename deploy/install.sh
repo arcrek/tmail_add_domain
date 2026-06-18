@@ -64,13 +64,24 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y postfix
 echo "==> Backing up /etc/postfix/main.cf"
 cp /etc/postfix/main.cf /etc/postfix/main.cf.bak
 
-echo "==> Applying tmail-policy config snippet"
-# Remove any previous tmail-policy block to keep install idempotent
-sed -i '/# --- tmail-policy additions ---/,/# --- end tmail-policy additions ---/d' /etc/postfix/main.cf
-cat deploy/postfix_main_snippet.cf >> /etc/postfix/main.cf
-
 echo "==> Installing accepted_domains PCRE map"
 cp deploy/accepted_domains /etc/postfix/accepted_domains
+
+echo "==> Applying Postfix config (postconf -e, no duplicates)"
+postconf -e \
+    "myhostname = ${POSTFIX_HOSTNAME}" \
+    "mydomain = ${POSTFIX_DOMAIN}" \
+    "myorigin = \$myhostname" \
+    "inet_interfaces = all" \
+    "inet_protocols = ipv4" \
+    "mydestination = " \
+    "local_recipient_maps = " \
+    "local_transport = error:local delivery disabled" \
+    "virtual_transport = smtp:127.0.0.1:2525" \
+    "virtual_mailbox_domains = pcre:/etc/postfix/accepted_domains" \
+    "mynetworks = 127.0.0.0/8" \
+    "relay_domains = " \
+    "smtpd_recipient_restrictions = permit_mynetworks, check_policy_service inet:127.0.0.1:10030, permit"
 
 echo "==> Validating Postfix config"
 postfix check
