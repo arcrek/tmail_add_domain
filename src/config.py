@@ -11,6 +11,7 @@ class Config:
     listen_addr: str
     listen_port: int
     cache_file: str
+    retention_days: int = 30
 
 def load_config(path: str) -> Config:
     with open(path) as f:
@@ -23,4 +24,5 @@ def load_config(path: str) -> Config:
         listen_addr=d["listen_addr"],
         listen_port=int(d["listen_port"]),
         cache_file=d["cache_file"],
+        retention_days=int(d.get("retention_days", 30)),
     )

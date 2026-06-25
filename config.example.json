@@ -5,5 +5,6 @@
   "catchall_address": "",
   "listen_addr": "127.0.0.1",
   "listen_port": 10030,
-  "cache_file": "/var/lib/tmail-policy/domains.json"
+  "cache_file": "/var/lib/tmail-policy/domains.json",
+  "retention_days": 30
 }

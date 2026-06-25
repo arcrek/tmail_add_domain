@@ -1,0 +1,12 @@
+[Unit]
+Description=Tmail Email Janitor (delete emails older than retention_days)
+After=network.target
+
+[Service]
+Type=oneshot
+User=tmail-policy
+WorkingDirectory=/opt/tmail-policy
+Environment=TMAIL_CONFIG=/opt/tmail-policy/config.json
+ExecStart=/usr/bin/python3 -m src.email_janitor
+StandardOutput=journal
+StandardError=journal

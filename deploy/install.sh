@@ -19,13 +19,15 @@ mkdir -p "$REMOTE_DIR/src" /var/lib/tmail-policy
 
 echo "==> Copying source files"
 cp src/__init__.py src/config.py src/domain_cache.py src/mx_checker.py \
-   src/jmap_client.py src/policy_daemon.py "$REMOTE_DIR/src/"
+   src/jmap_client.py src/policy_daemon.py src/email_janitor.py "$REMOTE_DIR/src/"
 
 echo "==> Copying config"
 cp config.json "$REMOTE_DIR/config.json"
 
-echo "==> Installing systemd unit"
+echo "==> Installing systemd units"
 cp "$SERVICE_FILE" /etc/systemd/system/tmail-policy.service
+cp deploy/tmail-janitor.service /etc/systemd/system/tmail-janitor.service
+cp deploy/tmail-janitor.timer /etc/systemd/system/tmail-janitor.timer
 
 echo "==> Creating service user (idempotent)"
 id tmail-policy &>/dev/null || useradd -r -s /sbin/nologin tmail-policy
@@ -38,6 +40,10 @@ echo "==> Enabling and starting policy daemon"
 systemctl daemon-reload
 systemctl enable tmail-policy
 systemctl restart tmail-policy
+
+echo "==> Enabling email janitor timer (runs daily at 03:00)"
+systemctl enable tmail-janitor.timer
+systemctl start tmail-janitor.timer
 
 echo "==> Status"
 systemctl status tmail-policy --no-pager -l
