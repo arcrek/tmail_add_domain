@@ -90,7 +90,7 @@ postconf -e \
     "virtual_mailbox_domains = pcre:/etc/postfix/accepted_domains" \
     "mynetworks = 127.0.0.0/8" \
     "relay_domains = " \
-    "smtpd_recipient_restrictions = permit_mynetworks, check_policy_service inet:127.0.0.1:10030, permit"
+    "smtpd_recipient_restrictions = permit_mynetworks, check_policy_service inet:127.0.0.1:10030, reject"
 
 echo "==> Validating Postfix config"
 postfix check

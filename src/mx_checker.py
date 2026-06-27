@@ -1,6 +1,11 @@
 from __future__ import annotations
 import dns.resolver
 
+
+class MxLookupError(Exception):
+    """Transient DNS failure — caller should defer, not reject."""
+
+
 def mx_matches(domain: str, expected_mx: str) -> bool:
     try:
         answers = dns.resolver.resolve(domain, "MX")
@@ -9,5 +14,7 @@ def mx_matches(domain: str, expected_mx: str) -> bool:
             if host == expected_mx.lower():
                 return True
         return False
-    except Exception:
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
         return False
+    except Exception as exc:
+        raise MxLookupError(str(exc)) from exc

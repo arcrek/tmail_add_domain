@@ -18,9 +18,10 @@ virtual_mailbox_domains = pcre:/etc/postfix/accepted_domains
 mynetworks = 127.0.0.0/8
 relay_domains =
 
-# Policy daemon
+# Policy daemon — permit_mynetworks first (skip policy for localhost),
+# policy service is the gate for external mail, trailing reject is the backstop.
 smtpd_recipient_restrictions =
     permit_mynetworks,
     check_policy_service inet:127.0.0.1:10030,
-    permit
+    reject
 # --- end tmail-policy additions ---

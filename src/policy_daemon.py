@@ -7,7 +7,7 @@ import sys
 from src.config import load_config
 from src.domain_cache import DomainCache
 from src.jmap_client import JmapClient
-from src.mx_checker import mx_matches
+from src.mx_checker import MxLookupError, mx_matches
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,18 +35,30 @@ class PolicyHandler(socketserver.StreamRequestHandler):
         recipient = attrs.get("recipient", "")
         domain = recipient.split("@")[-1].lower() if "@" in recipient else ""
 
-        if domain and not _cache.contains(domain):
+        if not domain:
+            self.wfile.write(b"action=REJECT Invalid recipient\n\n")
+            return
+
+        if _cache.contains(domain):
+            self.wfile.write(b"action=OK\n\n")
+            return
+
+        try:
             if mx_matches(domain, _config.mx_hostname):
                 ok = _jmap.provision_domain(domain)
                 if ok:
                     _cache.add(domain)
                     logger.info("Provisioned: %s", domain)
+                    self.wfile.write(b"action=OK\n\n")
                 else:
                     logger.error("JMAP provision failed: %s", domain)
+                    self.wfile.write(b"action=DEFER_IF_PERMIT Service temporarily unavailable\n\n")
             else:
-                logger.debug("MX mismatch, skipping: %s", domain)
-
-        self.wfile.write(b"action=dunno\n\n")
+                logger.debug("MX mismatch, rejecting: %s", domain)
+                self.wfile.write(b"action=REJECT\n\n")
+        except MxLookupError as exc:
+            logger.warning("DNS transient error for %s: %s", domain, exc)
+            self.wfile.write(b"action=DEFER_IF_PERMIT DNS lookup failed, try again later\n\n")
 
 
 def main() -> None:

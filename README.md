@@ -55,9 +55,9 @@ Add the following to `/etc/postfix/main.cf` (see `deploy/postfix_main_snippet.cf
 
 ```
 smtpd_recipient_restrictions =
-    check_policy_service inet:127.0.0.1:10030,
     permit_mynetworks,
-    reject_unauth_destination
+    check_policy_service inet:127.0.0.1:10030,
+    reject
 ```
 
 Stalwart must not listen on port 25 — move its SMTP listener so Postfix can bind it.
