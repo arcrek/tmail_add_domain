@@ -4,12 +4,14 @@ import { api } from '../api'
 import type { AdminSettings, MailServerSettings } from '../types'
 
 const props = defineProps<{ mailServer: MailServerSettings; csrf: string }>()
-const emit = defineEmits<{ updated: [settings: AdminSettings] }>()
+const emit = defineEmits<{ updated: [settings: AdminSettings]; busy: [value: boolean] }>()
 const draft = reactive({ ...props.mailServer })
 const pending = ref(false)
 const testing = ref(false)
 const status = ref('')
 const error = ref('')
+
+watch([pending, testing], ([saving, checking]) => emit('busy', saving || checking))
 
 watch(() => props.mailServer, (value) => {
   if (!pending.value && !testing.value) Object.assign(draft, value)

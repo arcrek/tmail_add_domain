@@ -11,7 +11,11 @@ const props = defineProps<{
   lastSyncError: SyncStatus
   csrf: string
 }>()
-const emit = defineEmits<{ updated: [settings: AdminSettings] }>()
+const emit = defineEmits<{
+  updated: [settings: AdminSettings]
+  busy: [value: boolean]
+  synced: [domains: string[], lastSync: SyncStatus]
+}>()
 
 const draft = reactive({
   autoSyncDomains: props.site.autoSyncDomains,
@@ -30,6 +34,8 @@ const pending = ref(false)
 const syncing = ref(false)
 const status = ref('')
 const error = ref('')
+
+watch([pending, syncing], ([saving, synchronizing]) => emit('busy', saving || synchronizing))
 
 watch(() => props.site, (value) => {
   if (!pending.value && !syncing.value) Object.assign(draft, {
@@ -109,19 +115,31 @@ async function syncNow(): Promise<void> {
   error.value = ''
   status.value = ''
   try {
-    await api.admin.syncDomains(props.csrf)
-    const settings = await api.admin.settings()
-    emit('updated', settings)
-    applySettings(settings, true)
-    status.value = `Sync complete. ${settings.domains.length} active domains.`
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : 'Domain sync failed.'
+    try {
+      const result = await api.admin.syncDomains(props.csrf)
+      displayedDomains.value = [...result.domains]
+      displayedSync.value = { ...result.lastSync }
+      emit('synced', result.domains, result.lastSync)
+      status.value = `Sync complete. ${result.domains.length} active domains.`
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : 'Domain sync failed.'
+      try {
+        const settings = await api.admin.settings()
+        emit('updated', settings)
+        applySettings(settings, false)
+      } catch {
+        // Keep the sync error and last known whitelist when refresh also fails.
+      }
+      return
+    }
+
     try {
       const settings = await api.admin.settings()
       emit('updated', settings)
-      applySettings(settings, false)
-    } catch {
-      // Keep the sync error and last known whitelist when refresh also fails.
+      applySettings(settings, true)
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : 'Settings refresh failed.'
+      error.value = `Domains synced, but settings refresh failed. ${detail}`
     }
   } finally {
     syncing.value = false

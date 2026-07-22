@@ -4,7 +4,7 @@ import { api } from '../api'
 import type { AdminSettings, AdminSiteSettings } from '../types'
 
 const props = defineProps<{ site: AdminSiteSettings; csrf: string }>()
-const emit = defineEmits<{ updated: [settings: AdminSettings] }>()
+const emit = defineEmits<{ updated: [settings: AdminSettings]; busy: [value: boolean] }>()
 
 function generalValues(site: AdminSiteSettings) {
   return {
@@ -25,6 +25,8 @@ const filePending = ref(0)
 const status = ref('')
 const error = ref('')
 const fileVersions = { logoDataUrl: 0, faviconDataUrl: 0 }
+
+watch([pending, filePending], ([saving, files]) => emit('busy', saving || files > 0))
 
 watch(() => props.site, (value) => {
   if (!pending.value && filePending.value === 0) Object.assign(draft, generalValues(value))

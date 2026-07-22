@@ -160,6 +160,27 @@ describe('administration frontend', () => {
     expect(wrapper.get('[role="alert"]').text()).toContain('Settings unavailable')
   })
 
+  it('retains failed hydration cleanup state until retry succeeds', async () => {
+    mocks.settings.mockRejectedValueOnce(new Error('Settings unavailable'))
+    mocks.logout.mockRejectedValueOnce(new Error('Cleanup unavailable')).mockResolvedValueOnce(undefined)
+    const wrapper = mount(AdminApp)
+    await wrapper.get('input[type="password"]').setValue('correct horse')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const retry = () => wrapper.findAll('button').find((button) => button.text() === 'Retry session cleanup')
+    expect(retry()?.exists()).toBe(true)
+    expect(wrapper.get('[role="alert"]').text()).toContain('Cleanup unavailable')
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+
+    await retry()!.trigger('click')
+    await flushPromises()
+    expect(mocks.logout).toHaveBeenCalledTimes(2)
+    expect(mocks.logout).toHaveBeenLastCalledWith('csrf-value')
+    expect(retry()).toBeUndefined()
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
+  })
+
   it('retains the authenticated session until logout succeeds', async () => {
     const logout = deferred<void>()
     mocks.logout.mockReturnValueOnce(logout.promise)
@@ -350,6 +371,31 @@ describe('administration frontend', () => {
     for (const wrapper of [general, mail, domains, content]) wrapper.unmount()
   })
 
+  it('blocks tab navigation until a deferred child save updates parent settings', async () => {
+    const response = deferred<typeof settings>()
+    mocks.updateSettings.mockReturnValueOnce(response.promise)
+    const wrapper = mount(AdminApp)
+    await wrapper.get('input[type="password"]').setValue('correct horse')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    const tab = (name: string) => wrapper.findAll('[role="tab"]').find((item) => item.text() === name)!
+    await tab('General').trigger('click')
+    await wrapper.get('input[name="appName"]').setValue('Saved app')
+    await wrapper.get('form').trigger('submit')
+
+    expect(tab('Mail Server').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('button.text-button').attributes('disabled')).toBeDefined()
+    await tab('Mail Server').trigger('click')
+    expect(wrapper.find('input[name="appName"]').exists()).toBe(true)
+
+    response.resolve({ ...settings, site: { ...site, appName: 'Saved app' } })
+    await flushPromises()
+    expect(tab('Mail Server').attributes('disabled')).toBeUndefined()
+    await tab('Mail Server').trigger('click')
+    await tab('General').trigger('click')
+    expect((wrapper.get('input[name="appName"]').element as HTMLInputElement).value).toBe('Saved app')
+  })
+
   it('warns that disabling auto-sync freezes the current whitelist', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const wrapper = mount(DomainsTab, {
@@ -396,6 +442,35 @@ describe('administration frontend', () => {
     expect(wrapper.text()).not.toContain('mail.example')
     expect(wrapper.emitted('updated')?.[1]).toEqual([syncedSettings])
     expect(mocks.settings).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the successful POST whitelist when the settings refresh fails', async () => {
+    mocks.syncDomains.mockResolvedValueOnce({
+      domains: ['post.example'],
+      lastSync: { success: true, detail: '1 domain', created_at: '2026-07-22T11:00:00Z' },
+    })
+    mocks.settings.mockRejectedValue(new Error('refresh offline'))
+    const wrapper = mount(DomainsTab, {
+      props: {
+        site,
+        domains: settings.domains,
+        lastSync: settings.lastSync,
+        lastSuccessfulSync: settings.lastSuccessfulSync,
+        lastSyncError: settings.lastSyncError,
+        csrf: 'csrf-value',
+      },
+    })
+
+    await wrapper.get('.admin-section-heading button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('post.example')
+    expect(wrapper.text()).not.toContain('mail.example')
+    expect(wrapper.get('[role="alert"]').text()).toContain('synced, but settings refresh failed')
+    expect(mocks.settings).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('synced')?.[0]).toEqual([[
+      'post.example',
+    ], { success: true, detail: '1 domain', created_at: '2026-07-22T11:00:00Z' }])
   })
 
   it('keeps an authoritative synced whitelist after the domains tab remounts', async () => {

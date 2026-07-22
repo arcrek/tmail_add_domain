@@ -5,7 +5,7 @@ import SandboxFrame from '../components/SandboxFrame.vue'
 import type { AdminSettings, AdminSiteSettings } from '../types'
 
 const props = defineProps<{ site: AdminSiteSettings; csrf: string }>()
-const emit = defineEmits<{ updated: [settings: AdminSettings] }>()
+const emit = defineEmits<{ updated: [settings: AdminSettings]; busy: [value: boolean] }>()
 
 type AdRow = { name: string; html: string }
 
@@ -25,6 +25,8 @@ const pending = ref(false)
 const status = ref('')
 const error = ref('')
 const MAX_CONTENT_LENGTH = 100_000
+
+watch(pending, (value) => emit('busy', value))
 
 watch(() => props.site, (value) => {
   if (!pending.value) Object.assign(draft, {
