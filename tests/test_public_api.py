@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from types import SimpleNamespace
+import threading
 from unittest.mock import MagicMock, call
 
 import pytest
 from fastapi.testclient import TestClient
 
 from src import api_server
+from src import admin_api
 from src.api_server import create_app
 from src.jmap_client import _SUMMARY_PROPERTIES
 
@@ -153,6 +156,60 @@ def test_message_pagination_uses_configured_limit(client, bearer, fake_jmap):
         "hydra:previous": "/messages?page=2",
     }
     assert response.json()["hydra:search"]["hydra:template"] == "/messages{?page}"
+
+
+def test_public_mail_request_waits_for_atomic_config_client_publication(
+    client, bearer, fake_jmap, monkeypatch
+):
+    request = SimpleNamespace(app=client.app)
+    build_started = threading.Event()
+    release_build = threading.Event()
+    request_done = threading.Event()
+    errors = []
+    responses = []
+    new_jmap = MagicMock()
+    new_jmap.list_messages.return_value = (1, [dict(MESSAGE)])
+
+    def build_client(_url, _token, _catchall):
+        build_started.set()
+        release_build.wait(2)
+        return new_jmap
+
+    monkeypatch.setattr(admin_api, "JmapClient", build_client)
+
+    def publish():
+        try:
+            admin_api.update_settings(
+                request, {"mailServer": {"mailAccountId": "new-account"}}, {}
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    def load_messages():
+        try:
+            responses.append(client.get("/messages", headers=bearer))
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            request_done.set()
+
+    publisher = threading.Thread(target=publish)
+    reader = threading.Thread(target=load_messages)
+    publisher.start()
+    assert build_started.wait(1)
+    reader.start()
+    request_done.wait(0.5)
+    release_build.set()
+    publisher.join(2)
+    reader.join(2)
+
+    assert not errors
+    assert not publisher.is_alive() and not reader.is_alive()
+    assert responses[0].status_code == 200
+    fake_jmap.list_messages.assert_not_called()
+    new_jmap.list_messages.assert_called_once_with(
+        "new-account", "box@example.com", 15, 0
+    )
 
 
 def test_messages_filter_jmap_overreturn_before_serialization(client, bearer, fake_jmap):

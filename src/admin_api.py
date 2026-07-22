@@ -147,11 +147,20 @@ def _validate_site(values: dict[str, object]) -> dict[str, object]:
 
 def _validate_mail(values: dict[str, object]) -> dict[str, object]:
     result = dict(values)
-    for key in ("jmap_url", "jmap_token", "catchall_address", "mail_account_id"):
+    result["jmap_url"] = _string(result["jmap_url"], "jmap_url")
+    for key in ("jmap_token", "catchall_address", "mail_account_id"):
         result[key] = _string(result[key], key).strip()
     try:
         parsed_url = urlsplit(result["jmap_url"])
-        valid_url = parsed_url.scheme in {"http", "https"} and bool(parsed_url.hostname)
+        port = parsed_url.port
+        valid_url = (
+            parsed_url.scheme in {"http", "https"}
+            and bool(parsed_url.hostname)
+            and not any(character.isspace() or ord(character) < 32 or ord(character) == 127
+                        for character in result["jmap_url"])
+            and not parsed_url.netloc.rsplit("@", 1)[-1].endswith(":")
+            and (port is None or 1 <= port <= 65535)
+        )
     except ValueError:
         valid_url = False
     if not valid_url or not result["jmap_token"]:
@@ -265,6 +274,8 @@ def sync_domains(request: Request, _session_value: dict[str, object] = Depends(_
         if not domains:
             raise ValueError("Stalwart returned no valid domains")
         with request.app.state.admin_lock:
+            if request.app.state.jmap is not jmap:
+                raise RuntimeError("JMAP client changed during sync")
             request.app.state.domain_cache.replace(domains)
             if not state.get_settings()["auto_sync_domains"]:
                 state.replace_frozen_domains(domains)

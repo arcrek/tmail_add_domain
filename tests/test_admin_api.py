@@ -131,6 +131,10 @@ def test_setting_bounds_are_rejected(admin_client, site):
 @pytest.mark.parametrize("mail", [
     {"jmapUrl": "https:///missing-host"},
     {"jmapUrl": "http://"},
+    {"jmapUrl": "https://bad host/jmap"},
+    {"jmapUrl": "https://example.com:notaport/jmap"},
+    {"jmapUrl": "https://example.com:99999/jmap"},
+    {"jmapUrl": "https://example.com/\x01jmap"},
     {"catchallAddress": "bad@@example.com"},
 ])
 def test_malformed_mail_settings_are_rejected(admin_client, mail):
@@ -232,6 +236,49 @@ def test_sync_persistence_failure_keeps_cache_and_records_failure(
     )
     response = admin_client.post("/admin/api/sync-domains", headers=admin_client.csrf)
     assert response.status_code == 502
+    assert admin_client.app.state.domain_cache.domains() == ["old.example"]
+    assert json.loads(cache_file.read_text()) == ["old.example"]
+    assert admin_client.app.state.state_store.last_sync()["success"] is False
+
+
+def test_sync_rejects_domains_from_superseded_jmap(
+    admin_client, fake_jmap, cache_file, monkeypatch
+):
+    from src import admin_api
+
+    request = SimpleNamespace(app=admin_client.app)
+    response_started = threading.Event()
+    release_response = threading.Event()
+    sync_status = []
+
+    def delayed_domains():
+        response_started.set()
+        release_response.wait(2)
+        return ["stale.example"]
+
+    fake_jmap.list_domains.side_effect = delayed_domains
+    replacement = MagicMock()
+    monkeypatch.setattr(admin_api, "JmapClient", MagicMock(return_value=replacement))
+
+    def sync():
+        try:
+            admin_api.sync_domains(request, {})
+            sync_status.append(200)
+        except Exception as exc:
+            sync_status.append(getattr(exc, "status_code", None))
+
+    thread = threading.Thread(target=sync)
+    thread.start()
+    assert response_started.wait(1)
+    admin_api.update_settings(
+        request, {"mailServer": {"jmapUrl": "https://new.example/jmap"}}, {}
+    )
+    release_response.set()
+    thread.join(2)
+
+    assert not thread.is_alive()
+    assert sync_status == [502]
+    assert admin_client.app.state.jmap is replacement
     assert admin_client.app.state.domain_cache.domains() == ["old.example"]
     assert json.loads(cache_file.read_text()) == ["old.example"]
     assert admin_client.app.state.state_store.last_sync()["success"] is False

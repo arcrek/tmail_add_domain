@@ -33,7 +33,7 @@ from src.api_models import (
     TokenResponse,
 )
 from src.api_state import StateStore
-from src.config import ConfigStore
+from src.config import Config, ConfigStore
 from src.domain_cache import DomainCache
 from src.jmap_client import JmapClient
 
@@ -87,13 +87,13 @@ def _stable_id(kind: str, value: str) -> str:
     return hashlib.sha256(f"{kind}:{value}".encode()).hexdigest()[:24]
 
 
-def current_domains(request: Request) -> list[str]:
-    cfg = request.app.state.config_store.get()
+def current_domains(request: Request, config: Config | None = None) -> list[str]:
+    cfg = config or request.app.state.config_store.get()
     return active_domains(cfg.cache_file, request.app.state.state_store)
 
 
-def _address(request: Request, value: str) -> str:
-    return normalize_address(value, current_domains(request), request.app.state.state_store.get_settings())
+def _address(request: Request, value: str, config: Config | None = None) -> str:
+    return normalize_address(value, current_domains(request, config), request.app.state.state_store.get_settings())
 
 
 def bearer_address(
@@ -108,8 +108,13 @@ def bearer_address(
         raise HTTPException(401, "Invalid bearer token") from None
 
 
-def mail_account_id(request: Request) -> str:
-    return request.app.state.config_store.get().mail_account_id or request.app.state.jmap.discover_mail_account_id()
+def mail_runtime(request: Request) -> tuple[Config, JmapClient]:
+    with request.app.state.admin_lock:
+        return request.app.state.config_store.get(), request.app.state.jmap
+
+
+def mail_account_id(config: Config, jmap: JmapClient) -> str:
+    return config.mail_account_id or jmap.discover_mail_account_id()
 
 
 def _email_value(value: object) -> str | None:
@@ -121,7 +126,9 @@ def _email_value(value: object) -> str | None:
     return None
 
 
-def _message_belongs_to_address(request: Request, address: str, message: object) -> bool:
+def _message_belongs_to_address(
+    request: Request, address: str, message: object, config: Config | None = None
+) -> bool:
     if not isinstance(message, dict):
         return False
     recipients = []
@@ -132,17 +139,19 @@ def _message_belongs_to_address(request: Request, address: str, message: object)
         if value is None:
             continue
         try:
-            if _address(request, value) == address:
+            if _address(request, value, config) == address:
                 return True
         except AddressValidationError:
             pass
     return False
 
 
-def message_for_address(request: Request, address: str, message_id: str) -> tuple[str, dict]:
-    account_id = mail_account_id(request)
-    message = request.app.state.jmap.get_message(account_id, message_id)
-    if _message_belongs_to_address(request, address, message):
+def message_for_address(
+    request: Request, address: str, message_id: str, config: Config, jmap: JmapClient
+) -> tuple[str, dict]:
+    account_id = mail_account_id(config, jmap)
+    message = jmap.get_message(account_id, message_id)
+    if _message_belongs_to_address(request, address, message, config):
         return account_id, message
     raise HTTPException(404, "Message not found")
 
@@ -361,12 +370,13 @@ def register_public_routes(app: FastAPI) -> None:
         responses=_ERROR_RESPONSES,
     )
     def messages(request: Request, page: int = Query(1, ge=1), address: str = Depends(bearer_address)):
+        config, jmap = mail_runtime(request)
         settings = request.app.state.state_store.get_settings()
         limit = int(settings["message_limit"])
-        account_id = mail_account_id(request)
-        total, values = request.app.state.jmap.list_messages(account_id, address, limit, (page - 1) * limit)
+        account_id = mail_account_id(config, jmap)
+        total, values = jmap.list_messages(account_id, address, limit, (page - 1) * limit)
         blocked = {str(value).encode("idna").decode("ascii").lower() for value in settings["blocked_sender_domains"]}
-        owned = [value for value in values if _message_belongs_to_address(request, address, value)]
+        owned = [value for value in values if _message_belongs_to_address(request, address, value, config)]
         safe_total = max(0, total - (len(values) - len(owned)))
         view, search = _collection_metadata("/messages", page, safe_total, limit)
         return HydraMessages(
@@ -378,22 +388,25 @@ def register_public_routes(app: FastAPI) -> None:
 
     @app.get("/messages/{message_id}", response_model=MessageResource, responses=_ERROR_RESPONSES)
     def message(message_id: str, request: Request, address: str = Depends(bearer_address)):
-        account_id, value = message_for_address(request, address, message_id)
+        config, jmap = mail_runtime(request)
+        account_id, value = message_for_address(request, address, message_id, config, jmap)
         settings = request.app.state.state_store.get_settings()
         blocked = {str(item).encode("idna").decode("ascii").lower() for item in settings["blocked_sender_domains"]}
         return _message(value, account_id, blocked)
 
     @app.patch("/messages/{message_id}", response_model=SeenPatch, responses=_ERROR_RESPONSES)
     def patch_message(body: SeenPatch, message_id: str, request: Request, address: str = Depends(bearer_address)):
-        account_id, _value = message_for_address(request, address, message_id)
-        if not request.app.state.jmap.set_seen(account_id, message_id, body.seen):
+        config, jmap = mail_runtime(request)
+        account_id, _value = message_for_address(request, address, message_id, config, jmap)
+        if not jmap.set_seen(account_id, message_id, body.seen):
             raise HTTPException(502, "Could not update message")
         return body
 
     @app.delete("/messages/{message_id}", status_code=204, response_class=Response, responses=_ERROR_RESPONSES)
     def delete_message(message_id: str, request: Request, address: str = Depends(bearer_address)):
-        account_id, _value = message_for_address(request, address, message_id)
-        if not request.app.state.jmap.delete_message(account_id, message_id):
+        config, jmap = mail_runtime(request)
+        account_id, _value = message_for_address(request, address, message_id, config, jmap)
+        if not jmap.delete_message(account_id, message_id):
             raise HTTPException(502, "Could not delete message")
         return Response(status_code=204)
 
@@ -402,24 +415,26 @@ def register_public_routes(app: FastAPI) -> None:
         responses=_ATTACHMENT_RESPONSES,
     )
     def attachment(message_id: str, blob_id: str, request: Request, address: str = Depends(bearer_address)):
-        account_id, value = message_for_address(request, address, message_id)
+        config, jmap = mail_runtime(request)
+        account_id, value = message_for_address(request, address, message_id, config, jmap)
         match = next((item for item in value.get("attachments") or [] if item.get("blobId") == blob_id), None)
         if match is None:
             raise HTTPException(404, "Attachment not found")
         name = str(match.get("name") or "attachment")
-        content, _content_type = request.app.state.jmap.download_blob(account_id, blob_id, name)
+        content, _content_type = jmap.download_blob(account_id, blob_id, name)
         return StreamingResponse(
             iter([content]), media_type="application/octet-stream", headers=_download_headers(name)
         )
 
     @app.get("/sources/{message_id}", response_class=StreamingResponse, responses=_SOURCE_RESPONSES)
     def source(message_id: str, request: Request, address: str = Depends(bearer_address)):
-        account_id, value = message_for_address(request, address, message_id)
+        config, jmap = mail_runtime(request)
+        account_id, value = message_for_address(request, address, message_id, config, jmap)
         blob_id = value.get("blobId")
         if not blob_id:
             raise HTTPException(404, "Message source not found")
         name = f"{message_id}.eml"
-        content, _content_type = request.app.state.jmap.download_blob(account_id, str(blob_id), name)
+        content, _content_type = jmap.download_blob(account_id, str(blob_id), name)
         return StreamingResponse(iter([content]), media_type="message/rfc822", headers=_download_headers(name))
 
 
