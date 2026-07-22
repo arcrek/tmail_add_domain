@@ -29,6 +29,16 @@ vi.mock('../api', async () => {
 
 enableAutoUnmount(afterEach)
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve
+    reject = onReject
+  })
+  return { promise, resolve, reject }
+}
+
 const site = {
   appName: 'tmail',
   logoDataUrl: '',
@@ -64,6 +74,8 @@ const settings = {
   mailServer,
   domains: ['example.com', 'mail.example'],
   lastSync: { success: true, detail: '2 domains', created_at: '2026-07-22T08:00:00Z' },
+  lastSuccessfulSync: { success: true, detail: '2 domains', created_at: '2026-07-22T08:00:00Z' },
+  lastSyncError: { success: false, detail: 'TimeoutError', created_at: '2026-07-21T08:00:00Z' },
 }
 
 const dashboard = {
@@ -75,7 +87,22 @@ const dashboard = {
     recentDomains: [{ domain: 'fresh.example', created_at: '2026-07-22T07:30:00Z' }],
   },
   autoSyncDomains: true,
-  lastSync: { success: true, detail: '2 domains', created_at: '2026-07-22T08:00:00Z' },
+  lastSync: { success: false, detail: 'ValueError', created_at: '2026-07-22T09:00:00Z' },
+  lastSuccessfulSync: { success: true, detail: '2 domains', created_at: '2026-07-22T08:00:00Z' },
+  lastSyncError: { success: false, detail: 'ValueError', created_at: '2026-07-22T09:00:00Z' },
+}
+
+const failedSettings = {
+  ...settings,
+  lastSync: { success: false, detail: 'ValueError', created_at: '2026-07-22T09:00:00Z' },
+  lastSyncError: { success: false, detail: 'ValueError', created_at: '2026-07-22T09:00:00Z' },
+}
+
+const syncedSettings = {
+  ...settings,
+  domains: ['new.example'],
+  lastSync: { success: true, detail: '1 domain', created_at: '2026-07-22T10:00:00Z' },
+  lastSuccessfulSync: { success: true, detail: '1 domain', created_at: '2026-07-22T10:00:00Z' },
 }
 
 describe('administration frontend', () => {
@@ -93,7 +120,10 @@ describe('administration frontend', () => {
     mocks.dashboard.mockResolvedValue(dashboard)
   })
 
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
 
   it('logs in without persisting the password and exposes tabs in the required order', async () => {
     const storage = vi.spyOn(Storage.prototype, 'setItem')
@@ -115,6 +145,39 @@ describe('administration frontend', () => {
       'Domains & Inbox',
       'HTML & Ads',
     ])
+    expect(wrapper.find('main').exists()).toBe(false)
+  })
+
+  it('invalidates a new session when settings hydration fails', async () => {
+    mocks.settings.mockRejectedValueOnce(new Error('Settings unavailable'))
+    const wrapper = mount(AdminApp)
+    await wrapper.get('input[type="password"]').setValue('correct horse')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.logout).toHaveBeenCalledWith('csrf-value')
+    expect(wrapper.get('input[type="password"]').exists()).toBe(true)
+    expect(wrapper.get('[role="alert"]').text()).toContain('Settings unavailable')
+  })
+
+  it('retains the authenticated session until logout succeeds', async () => {
+    const logout = deferred<void>()
+    mocks.logout.mockReturnValueOnce(logout.promise)
+    const wrapper = mount(AdminApp)
+    await wrapper.get('input[type="password"]').setValue('correct horse')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    await wrapper.get('button.text-button').trigger('click')
+    expect(wrapper.findAll('[role="tab"]')).toHaveLength(5)
+    logout.reject(new Error('Logout unavailable'))
+    await flushPromises()
+    expect(wrapper.findAll('[role="tab"]')).toHaveLength(5)
+    expect(wrapper.get('[role="alert"]').text()).toContain('Logout unavailable')
+
+    await wrapper.get('button.text-button').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('input[type="password"]').exists()).toBe(true)
   })
 
   it('moves between admin tabs with arrow keys', async () => {
@@ -140,6 +203,8 @@ describe('administration frontend', () => {
     expect(wrapper.text()).toContain('Provisions in seven days')
     expect(wrapper.text()).toContain('9')
     expect(wrapper.text()).toContain('fresh.example')
+    expect(wrapper.text()).toContain('2 domains')
+    expect(wrapper.text()).toContain('ValueError')
     expect(wrapper.find('canvas').exists()).toBe(false)
     expect(wrapper.text()).not.toMatch(/CPU|memory|host uptime/i)
   })
@@ -150,9 +215,16 @@ describe('administration frontend', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(mocks.updateSettings).toHaveBeenCalledWith({
-      site: expect.objectContaining({ appName: 'Mail Desk' }),
-    }, 'csrf-value')
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ site: {
+      appName: 'Mail Desk',
+      logoDataUrl: '',
+      faviconDataUrl: '',
+      primaryColor: '#45478f',
+      accentColor: '#34366f',
+      language: 'en',
+      cookieEnabled: false,
+      cookieText: '',
+    } }, 'csrf-value')
     expect(wrapper.get('[aria-live="polite"]').text()).toContain('saved')
   })
 
@@ -172,6 +244,59 @@ describe('administration frontend', () => {
     expect(wrapper.text()).toContain('Choose an image file')
   })
 
+  it('keeps save disabled for overlapping file reads and uses only the latest selection', async () => {
+    class DeferredReader {
+      static instances: DeferredReader[] = []
+      result: string | ArrayBuffer | null = null
+      onload: ((event: ProgressEvent<FileReader>) => void) | null = null
+      onerror: ((event: ProgressEvent<FileReader>) => void) | null = null
+      onabort: ((event: ProgressEvent<FileReader>) => void) | null = null
+      constructor() { DeferredReader.instances.push(this) }
+      readAsDataURL() {}
+    }
+    vi.stubGlobal('FileReader', DeferredReader)
+    const wrapper = mount(GeneralTab, { props: { site, csrf: 'csrf-value' } })
+    const input = wrapper.get('input[name="logo"]')
+    for (const name of ['old.png', 'new.png']) {
+      Object.defineProperty(input.element, 'files', { configurable: true, value: [new File([name], name, { type: 'image/png' })] })
+      await input.trigger('change')
+    }
+
+    DeferredReader.instances[1]!.result = 'data:image/png;base64,bmV3'
+    DeferredReader.instances[1]!.onload?.(new ProgressEvent('load') as ProgressEvent<FileReader>)
+    await flushPromises()
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+    DeferredReader.instances[0]!.onabort?.(new ProgressEvent('abort') as ProgressEvent<FileReader>)
+    await flushPromises()
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ site: expect.objectContaining({
+      logoDataUrl: 'data:image/png;base64,bmV3',
+    }) }, 'csrf-value')
+    expect(wrapper.text()).not.toContain('Could not read image')
+  })
+
+  it('reports an aborted current image read and unlocks save', async () => {
+    class AbortedReader {
+      result = null
+      onload = null
+      onerror = null
+      onabort: ((event: ProgressEvent<FileReader>) => void) | null = null
+      readAsDataURL() { queueMicrotask(() => this.onabort?.(new ProgressEvent('abort') as ProgressEvent<FileReader>)) }
+    }
+    vi.stubGlobal('FileReader', AbortedReader)
+    const wrapper = mount(GeneralTab, { props: { site, csrf: 'csrf-value' } })
+    const input = wrapper.get('input[name="logo"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [new File(['x'], 'logo.png', { type: 'image/png' })] })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Could not read image')
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
+  })
+
   it('preserves an unchanged masked token and tests mail with CSRF', async () => {
     const wrapper = mount(MailServerTab, { props: { mailServer, csrf: 'csrf-value' } })
     await wrapper.get('form').trigger('submit')
@@ -186,10 +311,56 @@ describe('administration frontend', () => {
     expect(mocks.testMail).toHaveBeenCalledWith('csrf-value')
   })
 
+  it('locks every settings form and preserves its draft while a save is pending', async () => {
+    const response = deferred<typeof settings>()
+    mocks.updateSettings.mockReturnValue(response.promise)
+    const general = mount(GeneralTab, { props: { site, csrf: 'csrf-value' } })
+    const mail = mount(MailServerTab, { props: { mailServer, csrf: 'csrf-value' } })
+    const domains = mount(DomainsTab, { props: {
+      site,
+      domains: settings.domains,
+      lastSync: settings.lastSync,
+      lastSuccessfulSync: settings.lastSuccessfulSync,
+      lastSyncError: settings.lastSyncError,
+      csrf: 'csrf-value',
+    } })
+    const content = mount(ContentTab, { props: { site, csrf: 'csrf-value' } })
+
+    await general.get('input[name="appName"]').setValue('Draft app')
+    await mail.get('input[name="jmapUrl"]').setValue('https://draft.example/jmap')
+    await domains.get('input[name="fetchSeconds"]').setValue('45')
+    await content.get('textarea[name="headerHtml"]').setValue('Draft header')
+    for (const wrapper of [general, mail, domains, content]) await wrapper.get('form').trigger('submit')
+
+    await general.setProps({ site: { ...site, appName: 'Remote app' } })
+    await mail.setProps({ mailServer: { ...mailServer, jmapUrl: 'https://remote.example/jmap' } })
+    await domains.setProps({ site: { ...site, fetchSeconds: 90 } })
+    await content.setProps({ site: { ...site, headerHtml: 'Remote header' } })
+
+    for (const wrapper of [general, mail, domains, content]) {
+      expect(wrapper.get('fieldset').attributes('disabled')).toBeDefined()
+    }
+    expect((general.get('input[name="appName"]').element as HTMLInputElement).value).toBe('Draft app')
+    expect((mail.get('input[name="jmapUrl"]').element as HTMLInputElement).value).toBe('https://draft.example/jmap')
+    expect((domains.get('input[name="fetchSeconds"]').element as HTMLInputElement).value).toBe('45')
+    expect((content.get('textarea[name="headerHtml"]').element as HTMLTextAreaElement).value).toBe('Draft header')
+
+    response.resolve(settings)
+    await flushPromises()
+    for (const wrapper of [general, mail, domains, content]) wrapper.unmount()
+  })
+
   it('warns that disabling auto-sync freezes the current whitelist', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const wrapper = mount(DomainsTab, {
-      props: { site, domains: settings.domains, lastSync: settings.lastSync, csrf: 'csrf-value' },
+      props: {
+        site,
+        domains: settings.domains,
+        lastSync: settings.lastSync,
+        lastSuccessfulSync: settings.lastSuccessfulSync,
+        lastSyncError: settings.lastSyncError,
+        csrf: 'csrf-value',
+      },
     })
     await wrapper.get('input[name="autoSyncDomains"]').setValue(false)
 
@@ -200,17 +371,47 @@ describe('administration frontend', () => {
 
   it('replaces the displayed whitelist only after a successful manual sync', async () => {
     mocks.syncDomains.mockRejectedValueOnce(new Error('offline'))
+    mocks.settings.mockResolvedValueOnce(failedSettings).mockResolvedValueOnce(syncedSettings)
     const wrapper = mount(DomainsTab, {
-      props: { site, domains: settings.domains, lastSync: settings.lastSync, csrf: 'csrf-value' },
+      props: {
+        site,
+        domains: settings.domains,
+        lastSync: settings.lastSync,
+        lastSuccessfulSync: settings.lastSuccessfulSync,
+        lastSyncError: settings.lastSyncError,
+        csrf: 'csrf-value',
+      },
     })
 
     await wrapper.get('button[type="button"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('example.com')
     expect(wrapper.text()).not.toContain('new.example')
+    expect(wrapper.text()).toContain('ValueError')
+    expect(wrapper.emitted('updated')?.[0]).toEqual([failedSettings])
 
     await wrapper.get('button[type="button"]').trigger('click')
     await flushPromises()
+    expect(wrapper.text()).toContain('new.example')
+    expect(wrapper.text()).not.toContain('mail.example')
+    expect(wrapper.emitted('updated')?.[1]).toEqual([syncedSettings])
+    expect(mocks.settings).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps an authoritative synced whitelist after the domains tab remounts', async () => {
+    mocks.settings.mockResolvedValueOnce(settings).mockResolvedValueOnce(syncedSettings)
+    const wrapper = mount(AdminApp)
+    await wrapper.get('input[type="password"]').setValue('correct horse')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    const tab = (name: string) => wrapper.findAll('[role="tab"]').find((item) => item.text() === name)!
+
+    await tab('Domains & Inbox').trigger('click')
+    await wrapper.get('.admin-section-heading button').trigger('click')
+    await flushPromises()
+    await tab('General').trigger('click')
+    await tab('Domains & Inbox').trigger('click')
+
     expect(wrapper.text()).toContain('new.example')
     expect(wrapper.text()).not.toContain('mail.example')
   })
@@ -226,5 +427,22 @@ describe('administration frontend', () => {
     }
     expect(wrapper.text()).toContain('cannot access inbox storage')
     expect(wrapper.find('[contenteditable]').exists()).toBe(false)
+  })
+
+  it('rejects duplicate normalized ad names and oversized content before submit', async () => {
+    const wrapper = mount(ContentTab, { props: { site, csrf: 'csrf-value' } })
+    await wrapper.get('.subsection-heading button').trigger('click')
+    const names = wrapper.findAll('.ad-editor input')
+    await names[1]!.setValue(' sidebar ')
+    await wrapper.get('form').trigger('submit')
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('unique')
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+
+    await names[1]!.setValue('banner')
+    await wrapper.get('textarea[name="headerHtml"]').setValue('x'.repeat(100_001))
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.get('[role="alert"]').text()).toContain('100,000')
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
   })
 })

@@ -33,3 +33,15 @@ def test_activity_summary_counts_domains_today_and_seven_days(tmp_path):
     assert summary["domainsSevenDays"] == 1
     assert summary["recentDomains"][0]["domain"] == "example.com"
     assert {event["domain"] for event in summary["recentDomains"]} == {"example.com", "old.example"}
+
+
+def test_sync_history_retains_success_and_error_independently(tmp_path):
+    store = StateStore(str(tmp_path / "state.db"))
+    store.record_sync(True, "2 domains")
+    store.record_sync(False, "TimeoutError")
+
+    history = store.sync_history()
+
+    assert history["lastSync"]["success"] is False
+    assert history["lastSuccessfulSync"]["detail"] == "2 domains"
+    assert history["lastSyncError"]["detail"] == "TimeoutError"

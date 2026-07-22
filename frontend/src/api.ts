@@ -1,17 +1,16 @@
 import type {
   AccountResource,
   AdminSettings,
+  AdminSettingsUpdate,
   DashboardResource,
   DomainResource,
   HydraCollection,
   HydraError,
-  MailServerSettings,
   MessageResource,
   MessageSummary,
   SiteResource,
   SyncStatus,
   TokenResponse,
-  AdminSiteSettings,
 } from './types'
 
 interface RequestOptions extends RequestInit {
@@ -89,10 +88,8 @@ export const api = {
     logout: (csrf: string) =>
       request<void>('/admin/api/logout', { method: 'POST', csrf }),
     settings: () => request<AdminSettings>('/admin/api/settings'),
-    updateSettings: (
-      values: { site?: Partial<AdminSiteSettings>; mailServer?: Partial<MailServerSettings> },
-      csrf: string,
-    ) => request<AdminSettings>('/admin/api/settings', { method: 'PUT', csrf, ...json(values) }),
+    updateSettings: (values: AdminSettingsUpdate, csrf: string) =>
+      request<AdminSettings>('/admin/api/settings', { method: 'PUT', csrf, ...json(values) }),
     syncDomains: (csrf: string) =>
       request<{ domains: string[]; lastSync: SyncStatus }>('/admin/api/sync-domains', {
         method: 'POST',

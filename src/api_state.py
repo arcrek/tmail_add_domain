@@ -118,18 +118,26 @@ class StateStore:
         self.record_event("sync_success" if success else "sync_failure", detail=detail)
 
     def last_sync(self) -> dict[str, object]:
+        return self.sync_history()["lastSync"]
+
+    def sync_history(self) -> dict[str, dict[str, object]]:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT kind, detail, created_at FROM activity "
-                "WHERE kind IN ('sync_success', 'sync_failure') ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-            if row is None:
-                return {}
-            return {
-                "success": row["kind"] == "sync_success",
-                "detail": row["detail"],
-                "created_at": row["created_at"],
-            }
+            rows = conn.execute(
+                "SELECT kind, detail, created_at FROM activity WHERE id IN ("
+                "SELECT MAX(id) FROM activity WHERE kind = 'sync_success' UNION "
+                "SELECT MAX(id) FROM activity WHERE kind = 'sync_failure'"
+                ") ORDER BY id DESC"
+            ).fetchall()
+        statuses = [{
+            "success": row["kind"] == "sync_success",
+            "detail": row["detail"],
+            "created_at": row["created_at"],
+        } for row in rows]
+        return {
+            "lastSync": statuses[0] if statuses else {},
+            "lastSuccessfulSync": next((item for item in statuses if item["success"]), {}),
+            "lastSyncError": next((item for item in statuses if not item["success"]), {}),
+        }
 
     def activity_summary(self) -> dict[str, object]:
         now = datetime.now(timezone.utc)

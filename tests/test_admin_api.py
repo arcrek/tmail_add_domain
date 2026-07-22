@@ -429,3 +429,17 @@ def test_dashboard_combines_jmap_and_activity(admin_client, fake_jmap):
     assert "domainsToday" in body["domains"]
     assert "domainsSevenDays" in body["domains"]
     assert body["domains"]["active"] == 1
+
+
+def test_settings_and_dashboard_keep_success_and_error_sync_history(admin_client):
+    state = admin_client.app.state.state_store
+    state.record_sync(True, "1 domain")
+    state.record_sync(False, "TimeoutError")
+
+    settings = admin_client.get("/admin/api/settings").json()
+    dashboard = admin_client.get("/admin/api/dashboard").json()
+
+    for body in (settings, dashboard):
+        assert body["lastSync"]["success"] is False
+        assert body["lastSuccessfulSync"]["detail"] == "1 domain"
+        assert body["lastSyncError"]["detail"] == "TimeoutError"

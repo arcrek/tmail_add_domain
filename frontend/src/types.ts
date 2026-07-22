@@ -154,14 +154,24 @@ export interface SyncStatus {
   created_at?: string
 }
 
-export interface AdminSettings {
+export interface SyncHistory {
+  lastSync: SyncStatus
+  lastSuccessfulSync: SyncStatus
+  lastSyncError: SyncStatus
+}
+
+export interface AdminSettings extends SyncHistory {
   site: AdminSiteSettings
   mailServer: MailServerSettings
   domains: string[]
-  lastSync: SyncStatus
 }
 
-export interface DashboardResource {
+export interface AdminSettingsUpdate {
+  site?: Partial<AdminSiteSettings>
+  mailServer?: Partial<MailServerSettings>
+}
+
+export interface DashboardResource extends SyncHistory {
   messages: { stored: number; today: number; sevenDays: number }
   domains: {
     active: number
@@ -170,5 +180,4 @@ export interface DashboardResource {
     recentDomains: Array<{ domain: string; created_at: string }>
   }
   autoSyncDomains: boolean
-  lastSync: SyncStatus
 }

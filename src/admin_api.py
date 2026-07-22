@@ -226,7 +226,7 @@ def settings(request: Request, _session_value: dict[str, object] = Depends(_sess
         "site": {_camel(key): site[key] for key in SITE_KEYS},
         "mailServer": {_camel(key): mail[key] for key in MAIL_KEYS},
         "domains": _active_domains(request, site),
-        "lastSync": request.app.state.state_store.last_sync(),
+        **request.app.state.state_store.sync_history(),
     }
 
 
@@ -317,5 +317,5 @@ def dashboard(request: Request, _session_value: dict[str, object] = Depends(_ses
         "messages": jmap.message_counts(account_id),
         "domains": domains,
         "autoSyncDomains": site["auto_sync_domains"],
-        "lastSync": request.app.state.state_store.last_sync(),
+        **request.app.state.state_store.sync_history(),
     }

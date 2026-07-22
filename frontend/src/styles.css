@@ -525,6 +525,15 @@ th {
   gap: 1.5rem;
 }
 
+.settings-fields {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  gap: 1.5rem;
+}
+
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -36,13 +36,22 @@ function moveTab(event: KeyboardEvent, index: number): void {
 async function login(): Promise<void> {
   pending.value = true
   error.value = ''
+  let newCsrf = ''
   try {
     const session = await api.admin.login(password.value)
+    newCsrf = session.csrfToken
     const loaded = await api.admin.settings()
-    csrf.value = session.csrfToken
+    csrf.value = newCsrf
     settings.value = loaded
     password.value = ''
   } catch (cause) {
+    if (newCsrf) {
+      try {
+        await api.admin.logout(newCsrf)
+      } catch {
+        // Keep the hydration failure as the actionable error.
+      }
+    }
     csrf.value = ''
     settings.value = null
     error.value = cause instanceof Error ? cause.message : 'Could not sign in.'
@@ -54,15 +63,18 @@ async function login(): Promise<void> {
 
 async function logout(): Promise<void> {
   const token = csrf.value
-  csrf.value = ''
-  settings.value = null
-  activeTab.value = 'Dashboard'
   error.value = ''
   if (!token) return
+  pending.value = true
   try {
     await api.admin.logout(token)
-  } catch {
-    // In-memory credentials are already cleared.
+    csrf.value = ''
+    settings.value = null
+    activeTab.value = 'Dashboard'
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : 'Could not log out.'
+  } finally {
+    pending.value = false
   }
 }
 </script>
@@ -97,17 +109,18 @@ async function logout(): Promise<void> {
           @keydown="moveTab($event, index)"
         >{{ tab }}</button>
       </nav>
-      <button class="text-button" type="button" @click="logout">Log out</button>
+      <button class="text-button" type="button" :disabled="pending" @click="logout">{{ pending ? 'Logging out' : 'Log out' }}</button>
+      <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </aside>
 
-    <main class="admin-content">
+    <div class="admin-content">
       <div role="tabpanel" tabindex="0" :aria-labelledby="`admin-tab-${tabs.indexOf(activeTab)}`">
         <DashboardTab v-if="activeTab === 'Dashboard'" />
         <GeneralTab v-else-if="activeTab === 'General'" :site="settings.site" :csrf="csrf" @updated="settings = $event" />
         <MailServerTab v-else-if="activeTab === 'Mail Server'" :mail-server="settings.mailServer" :csrf="csrf" @updated="settings = $event" />
-        <DomainsTab v-else-if="activeTab === 'Domains & Inbox'" :site="settings.site" :domains="settings.domains" :last-sync="settings.lastSync" :csrf="csrf" @updated="settings = $event" />
+        <DomainsTab v-else-if="activeTab === 'Domains & Inbox'" :site="settings.site" :domains="settings.domains" :last-sync="settings.lastSync" :last-successful-sync="settings.lastSuccessfulSync" :last-sync-error="settings.lastSyncError" :csrf="csrf" @updated="settings = $event" />
         <ContentTab v-else :site="settings.site" :csrf="csrf" @updated="settings = $event" />
       </div>
-    </main>
+    </div>
   </div>
 </template>

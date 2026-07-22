@@ -11,6 +11,11 @@ function dateTime(value?: string): string {
   return value ? new Date(value).toLocaleString() : 'Not yet'
 }
 
+function syncText(value: DashboardResource['lastSync'], empty: string): string {
+  if (!value.created_at) return empty
+  return `${value.detail || 'No detail'}, ${dateTime(value.created_at)}`
+}
+
 async function refresh(): Promise<void> {
   loading.value = true
   error.value = ''
@@ -73,8 +78,8 @@ onMounted(refresh)
           <h2 id="sync-summary-title">Domain sync</h2>
           <dl>
             <div><dt>Auto-sync</dt><dd>{{ dashboard.autoSyncDomains ? 'On' : 'Off' }}</dd></div>
-            <div><dt>Last successful sync</dt><dd>{{ dashboard.lastSync.success ? dateTime(dashboard.lastSync.created_at) : 'Not yet' }}</dd></div>
-            <div><dt>Last error</dt><dd :class="{ 'status-error': dashboard.lastSync.success === false }">{{ dashboard.lastSync.success === false ? dashboard.lastSync.detail || 'Sync failed' : 'None' }}</dd></div>
+            <div><dt>Last successful sync</dt><dd>{{ syncText(dashboard.lastSuccessfulSync, 'Not yet') }}</dd></div>
+            <div><dt>Last error</dt><dd :class="{ 'status-error': dashboard.lastSyncError.created_at }">{{ syncText(dashboard.lastSyncError, 'None') }}</dd></div>
           </dl>
         </section>
       </div>
