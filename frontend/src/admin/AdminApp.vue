@@ -8,6 +8,11 @@ import DomainsTab from './DomainsTab.vue'
 import GeneralTab from './GeneralTab.vue'
 import MailServerTab from './MailServerTab.vue'
 
+withDefaults(defineProps<{ appName?: string; logoDataUrl?: string }>(), {
+  appName: 'Temporary Inbox',
+  logoDataUrl: '',
+})
+
 const tabs = ['Dashboard', 'General', 'Mail Server', 'Domains & Inbox', 'HTML & Ads'] as const
 type Tab = typeof tabs[number]
 
@@ -133,7 +138,7 @@ async function logout(): Promise<void> {
     <div class="admin-login-panel panel">
       <p class="eyebrow">Administration</p>
       <h1 id="admin-login-title">Admin access</h1>
-      <p class="admin-note">Sign in again after a reload. Credentials are never stored in this browser.</p>
+      <p class="admin-note">Your session is kept for 12 hours on this device. Credentials are never stored.</p>
       <form class="settings-form" @submit.prevent="login">
         <div class="field"><label for="admin-password">Administrator password</label><input id="admin-password" v-model="password" type="password" autocomplete="current-password" required autofocus :disabled="pending || Boolean(cleanupCsrf)"></div>
         <button class="primary-button" type="submit" :disabled="pending || Boolean(cleanupCsrf)">{{ pending ? 'Signing in' : 'Log in' }}</button>
@@ -143,9 +148,26 @@ async function logout(): Promise<void> {
     </div>
   </section>
 
-  <div v-else class="admin-shell">
+  <div v-else class="admin-shell three-pane">
+    <aside class="admin-account-rail account-rail">
+      <a class="rail-brand" href="/">
+        <img v-if="settings.site.logoDataUrl || logoDataUrl" :src="settings.site.logoDataUrl || logoDataUrl" alt="">
+        <span>{{ settings.site.appName || appName }}</span>
+      </a>
+      <nav class="rail-nav" aria-label="Application navigation">
+        <a href="/">Public inbox</a>
+        <span aria-current="page">Administration</span>
+        <a href="/docs">API docs</a>
+      </nav>
+      <div class="api-status"><i aria-hidden="true" /> API status <strong>Healthy</strong></div>
+      <button class="rail-signout" type="button" :disabled="pending || childBusy" @click="logout">
+        {{ pending ? 'Logging out' : 'Log out' }}
+      </button>
+      <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+    </aside>
+
     <aside class="admin-sidebar">
-      <div><p class="eyebrow">Administration</p><strong>{{ settings.site.appName }}</strong></div>
+      <div class="list-heading"><div><h2>Settings</h2><span>System configuration</span></div></div>
       <nav role="tablist" aria-label="Administration sections">
         <button
           v-for="(tab, index) in tabs"
@@ -160,11 +182,9 @@ async function logout(): Promise<void> {
           @keydown="moveTab($event, index)"
         >{{ tab }}</button>
       </nav>
-      <button class="text-button" type="button" :disabled="pending || childBusy" @click="logout">{{ pending ? 'Logging out' : 'Log out' }}</button>
-      <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </aside>
 
-    <div class="admin-content">
+    <section class="admin-content">
       <div role="tabpanel" tabindex="0" :aria-labelledby="`admin-tab-${tabs.indexOf(activeTab)}`">
         <DashboardTab v-if="activeTab === 'Dashboard'" />
         <GeneralTab v-else-if="activeTab === 'General'" :site="settings.site" :csrf="csrf" @busy="childBusy = $event" @updated="settings = $event" />
@@ -172,6 +192,6 @@ async function logout(): Promise<void> {
         <DomainsTab v-else-if="activeTab === 'Domains & Inbox'" :site="settings.site" :domains="settings.domains" :last-sync="settings.lastSync" :last-successful-sync="settings.lastSuccessfulSync" :last-sync-error="settings.lastSyncError" :csrf="csrf" @busy="childBusy = $event" @synced="applyDomainSync" @updated="settings = $event" />
         <ContentTab v-else :site="settings.site" :csrf="csrf" @busy="childBusy = $event" @updated="settings = $event" />
       </div>
-    </div>
+    </section>
   </div>
 </template>

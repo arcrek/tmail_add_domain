@@ -132,6 +132,8 @@ describe('administration frontend', () => {
     const wrapper = mount(AdminApp)
 
     expect(wrapper.get('input[type="password"]').exists()).toBe(true)
+    expect(wrapper.get('.admin-note').text()).toContain('Your session is kept for 12 hours on this device.')
+    expect(wrapper.get('.admin-note').text()).not.toContain('Sign in again after a reload.')
     expect(mocks.settings).not.toHaveBeenCalled()
     await wrapper.get('input[type="password"]').setValue('correct horse')
     await wrapper.get('form').trigger('submit')
@@ -147,6 +149,11 @@ describe('administration frontend', () => {
       'Domains & Inbox',
       'HTML & Ads',
     ])
+    expect(wrapper.get('.admin-shell').classes()).toContain('three-pane')
+    expect(wrapper.get('.admin-account-rail').text()).toContain('tmail')
+    expect(wrapper.get('.admin-sidebar').text()).toContain('Dashboard')
+    expect(wrapper.get('.admin-content [role="tabpanel"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toMatch(/Sent|Contacts|Addresses/)
     expect(wrapper.find('main').exists()).toBe(false)
   })
 
@@ -157,7 +164,7 @@ describe('administration frontend', () => {
 
     expect(mocks.settings).toHaveBeenCalledTimes(1)
     expect(wrapper.findAll('[role="tab"]')).toHaveLength(5)
-    await wrapper.get('button.text-button').trigger('click')
+    await wrapper.get('.rail-signout').trigger('click')
     expect(mocks.logout).toHaveBeenCalledWith('resumed-csrf')
   })
 
@@ -202,14 +209,14 @@ describe('administration frontend', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    await wrapper.get('button.text-button').trigger('click')
+    await wrapper.get('.rail-signout').trigger('click')
     expect(wrapper.findAll('[role="tab"]')).toHaveLength(5)
     logout.reject(new Error('Logout unavailable'))
     await flushPromises()
     expect(wrapper.findAll('[role="tab"]')).toHaveLength(5)
     expect(wrapper.get('[role="alert"]').text()).toContain('Logout unavailable')
 
-    await wrapper.get('button.text-button').trigger('click')
+    await wrapper.get('.rail-signout').trigger('click')
     await flushPromises()
     expect(wrapper.get('input[type="password"]').exists()).toBe(true)
   })
@@ -397,7 +404,7 @@ describe('administration frontend', () => {
     await wrapper.get('form').trigger('submit')
 
     expect(tab('Mail Server').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('button.text-button').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.rail-signout').attributes('disabled')).toBeDefined()
     await tab('Mail Server').trigger('click')
     expect(wrapper.find('input[name="appName"]').exists()).toBe(true)
 

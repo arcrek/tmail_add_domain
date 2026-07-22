@@ -180,7 +180,11 @@ onBeforeUnmount(() => {
         mode="content"
         :title="`Configured ${name} content`"
       />
-      <AdminApp v-if="view === 'admin'" />
+      <AdminApp
+        v-if="view === 'admin'"
+        :app-name="site?.appName"
+        :logo-data-url="site?.logoDataUrl"
+      />
 
       <InboxView
         v-else-if="view === 'inbox' && current"
