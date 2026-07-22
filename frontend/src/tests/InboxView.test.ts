@@ -254,4 +254,18 @@ describe('InboxView polling', () => {
     expect(JSON.stringify(notifications)).not.toContain('Message two')
     expect(JSON.stringify(notifications)).not.toContain('sender@example.com')
   })
+
+  it('uses the approved account, message-list, and reader columns without fake navigation', async () => {
+    const session = { address: 'box@example.com', token: 'signed' }
+    const wrapper = mount(InboxView, {
+      props: { session, fetchSeconds: 20, appName: 'Temporary Inbox', logoDataUrl: '' },
+    })
+    await flushPromises()
+
+    expect(wrapper.classes()).toContain('three-pane')
+    expect(wrapper.get('.account-rail').text()).toContain(session.address)
+    expect(wrapper.get('.message-list').exists()).toBe(true)
+    expect(wrapper.get('.mail-detail').exists()).toBe(true)
+    expect(wrapper.text()).not.toMatch(/Sent|Contacts|Addresses/)
+  })
 })

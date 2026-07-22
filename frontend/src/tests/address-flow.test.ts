@@ -35,7 +35,7 @@ describe('address flow', () => {
     mocks.domains.mockReset().mockResolvedValue(domains(['example.com']))
     mocks.token.mockReset().mockResolvedValue({ id: 'account-id', token: 'signed-token' })
     mocks.site.mockReset().mockResolvedValue({
-      appName: 'tmail',
+      appName: 'Temporary Inbox',
       logoDataUrl: '',
       faviconDataUrl: '',
       primaryColor: '#45478f',
@@ -76,7 +76,7 @@ describe('address flow', () => {
     await flushPromises()
 
     expect(mocks.token).toHaveBeenCalledWith('box@example.com')
-    expect(wrapper.text()).toContain('Inbox ready')
+    expect(wrapper.find('.inbox-view').exists()).toBe(true)
     expect(wrapper.text()).toContain('box@example.com')
     expect(JSON.parse(localStorage.getItem('tmail.addresses') ?? '[]')).toEqual([
       { address: 'box@example.com', token: 'signed-token' },
@@ -95,6 +95,16 @@ describe('address flow', () => {
     expect(frames[1]?.attributes('sandbox')).toContain('allow-scripts')
     expect(frames[1]?.attributes('sandbox')).not.toContain('allow-same-origin')
     expect(wrapper.text()).not.toContain('Configured header')
+  })
+
+  it('uses the approved public address columns', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+
+    expect(wrapper.get('.address-layout').classes()).toContain('three-pane')
+    expect(wrapper.get('.account-rail').text()).toContain('Temporary Inbox')
+    expect(wrapper.get('.saved-inboxes').exists()).toBe(true)
+    expect(wrapper.get('.address-detail').text()).toContain('Create an address')
   })
 
   it('applies and cleans up configured branding, language, favicon, and cookie notice', async () => {
@@ -127,8 +137,8 @@ describe('address flow', () => {
     const wrapper = mount(App)
     await flushPromises()
 
-    expect(wrapper.get('.brand img').attributes('src')).toBe('data:image/png;base64,bG9nbw==')
-    expect(wrapper.get('.brand').attributes('aria-label')).toBe('Configured Mail home')
+    expect(wrapper.get('.rail-brand img').attributes('src')).toBe('data:image/png;base64,bG9nbw==')
+    expect(wrapper.get('.rail-brand').text()).toBe('Configured Mail')
     expect(wrapper.get('[role="status"][aria-label="Cookie notice"]').text()).toContain('necessary preference cookie')
     expect(root.style.getPropertyValue('--primary')).toBe('#123456')
     expect(root.style.getPropertyValue('--accent')).toBe('#654321')
@@ -168,7 +178,7 @@ describe('address flow', () => {
     await flushPromises()
 
     expect(mocks.token).toHaveBeenCalledWith('box@example.com')
-    expect(wrapper.text()).toContain('Inbox ready')
+    expect(wrapper.find('.inbox-view').exists()).toBe(true)
     expect(wrapper.text()).toContain('box@example.com')
   })
 

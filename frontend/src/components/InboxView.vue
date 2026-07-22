@@ -4,7 +4,12 @@ import { ApiError, api } from '../api'
 import type { AddressSession, HydraCollection, MessageSummary } from '../types'
 import MessageReader from './MessageReader.vue'
 
-const props = defineProps<{ session: AddressSession; fetchSeconds: number }>()
+const props = withDefaults(defineProps<{
+  session: AddressSession
+  fetchSeconds: number
+  appName?: string
+  logoDataUrl?: string
+}>(), { appName: 'Temporary Inbox', logoDataUrl: '' })
 const emit = defineEmits<{ newAddress: [] }>()
 
 const collection = ref<HydraCollection<MessageSummary> | null>(null)
@@ -171,30 +176,41 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="inbox-view" aria-labelledby="inbox-title">
-    <header class="inbox-toolbar">
-      <div>
-        <p class="eyebrow">Inbox ready</p>
-        <h1 id="inbox-title">{{ session.address }}</h1>
+  <section class="inbox-view three-pane" aria-labelledby="inbox-title">
+    <aside class="account-rail">
+      <a class="rail-brand" href="/">
+        <img v-if="logoDataUrl" :src="logoDataUrl" alt="">
+        <span>{{ appName }}</span>
+      </a>
+      <div class="address-card">
+        <small>Your current address</small>
+        <strong id="inbox-title">{{ session.address }}</strong>
+        <button class="secondary-button" type="button" @click="copyAddress">Copy</button>
       </div>
-      <div class="inbox-actions">
-        <button class="secondary-button compact-button" type="button" @click="copyAddress">Copy address</button>
-        <button
-          class="secondary-button compact-button"
-          type="button"
-          data-action="notifications"
-          :disabled="notificationPermission === 'granted'"
-          @click="enableNotifications"
-        >
-          {{ notificationPermission === 'granted' ? 'Notifications on' : 'Enable notifications' }}
-        </button>
-        <button class="primary-button compact-button" type="button" @click="emit('newAddress')">New address</button>
+      <div class="rail-actions">
+        <button class="secondary-button" type="button" :disabled="refreshing" @click="refresh">Refresh</button>
+        <button class="primary-button" type="button" @click="emit('newAddress')">New address</button>
       </div>
+      <button
+        class="secondary-button notification-button"
+        type="button"
+        data-action="notifications"
+        :disabled="notificationPermission === 'granted'"
+        @click="enableNotifications"
+      >
+        {{ notificationPermission === 'granted' ? 'Notifications on' : 'Enable notifications' }}
+      </button>
+      <nav class="rail-nav" aria-label="Mailbox navigation">
+        <span aria-current="page">Inbox <b>{{ collection?.['hydra:totalItems'] ?? 0 }}</b></span>
+        <a href="/docs">API docs</a>
+        <a href="/admin">Admin</a>
+      </nav>
+      <div class="api-status"><i aria-hidden="true" /> API status <strong>Healthy</strong></div>
+      <button class="rail-signout" type="button" @click="emit('newAddress')">Leave inbox</button>
       <p v-if="notice" class="toolbar-notice" aria-live="polite">{{ notice }}</p>
-    </header>
+    </aside>
 
-    <div class="inbox-grid">
-      <aside class="message-list" aria-label="Messages">
+    <aside class="message-list" aria-label="Messages">
         <div class="list-heading">
           <div>
             <h2>Messages</h2>
@@ -255,8 +271,9 @@ onBeforeUnmount(() => {
           <span>Page {{ page }}</span>
           <button type="button" :disabled="!canNext" @click="changePage(page + 1)">Next</button>
         </nav>
-      </aside>
+    </aside>
 
+    <div class="mail-detail">
       <MessageReader
         v-if="selectedId"
         :id="selectedId"
@@ -264,6 +281,7 @@ onBeforeUnmount(() => {
         @seen="markSeen"
         @deleted="removeMessage"
         @stale="removeStale"
+        @close="selectedId = null"
       />
       <div v-else class="reader-placeholder">
         <h2>Select a message</h2>

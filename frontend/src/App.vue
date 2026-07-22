@@ -170,17 +170,6 @@ onBeforeUnmount(() => {
       mode="content"
       title="Configured site header"
     />
-    <header class="site-header">
-      <a class="brand" href="/" :aria-label="`${site?.appName || 'tmail'} home`">
-        <img v-if="site?.logoDataUrl" :src="site.logoDataUrl" alt="">
-        <span>{{ site?.appName || 'tmail' }}</span>
-      </a>
-      <nav aria-label="Site navigation">
-        <a href="/docs">API docs</a>
-        <a href="/admin">Admin</a>
-      </nav>
-    </header>
-
     <main>
       <SandboxFrame
         v-for="([name, html]) in adSlots"
@@ -197,6 +186,8 @@ onBeforeUnmount(() => {
         v-else-if="view === 'inbox' && current"
         :session="current"
         :fetch-seconds="site?.fetchSeconds ?? 20"
+        :app-name="site?.appName"
+        :logo-data-url="site?.logoDataUrl"
         @new-address="newAddress"
       />
 
@@ -207,7 +198,13 @@ onBeforeUnmount(() => {
         <span class="sr-only">Opening address</span>
       </section>
 
-      <AddressPanel v-else :initial-error="error" @open="openCreatedInbox" />
+      <AddressPanel
+        v-else
+        :initial-error="error"
+        :app-name="site?.appName"
+        :logo-data-url="site?.logoDataUrl"
+        @open="openCreatedInbox"
+      />
     </main>
 
     <section
@@ -227,9 +224,5 @@ onBeforeUnmount(() => {
       mode="content"
       title="Configured site footer"
     />
-    <footer class="site-footer">
-      <span>Passwordless temporary mail</span>
-      <a href="/docs">API reference</a>
-    </footer>
   </div>
 </template>

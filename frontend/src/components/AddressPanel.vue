@@ -4,7 +4,11 @@ import { ApiError, api } from '../api'
 import { loadSessions, removeSession } from '../session'
 import type { AddressSession, DomainResource } from '../types'
 
-defineProps<{ initialError?: string }>()
+withDefaults(defineProps<{
+  initialError?: string
+  appName?: string
+  logoDataUrl?: string
+}>(), { initialError: '', appName: 'Temporary Inbox', logoDataUrl: '' })
 const emit = defineEmits<{ open: [session: AddressSession] }>()
 
 const domains = ref<DomainResource[]>([])
@@ -84,91 +88,107 @@ function forget(address: string): void {
 </script>
 
 <template>
-  <section class="address-layout" aria-labelledby="address-title">
-    <div class="address-intro">
-      <p class="eyebrow">Temporary inbox</p>
-      <h1 id="address-title">Receive mail. Keep your address.</h1>
-      <p class="lede">Choose a name, open the inbox, and leave no account behind.</p>
-    </div>
+  <section class="address-layout three-pane" aria-labelledby="address-title">
+    <aside class="account-rail">
+      <a class="rail-brand" href="/">
+        <img v-if="logoDataUrl" :src="logoDataUrl" alt="">
+        <span>{{ appName }}</span>
+      </a>
+      <nav class="rail-nav" aria-label="Mailbox navigation">
+        <span aria-current="page">Create address</span>
+        <a href="/docs">API docs</a>
+        <a href="/admin">Admin</a>
+      </nav>
+      <div class="api-status"><i aria-hidden="true" /> API status <strong>Healthy</strong></div>
+    </aside>
 
-    <div class="address-workspace">
-      <div v-if="loadingDomains" class="panel loading-panel" aria-live="polite">
-        <span class="skeleton skeleton-label" />
-        <span class="skeleton skeleton-field" />
-        <span class="skeleton skeleton-button" />
-        <span class="sr-only">Loading receiving domains</span>
-      </div>
-
-      <div v-else-if="domainError" class="panel empty-state" role="alert">
-        <h2>Domains could not be loaded</h2>
-        <p>{{ domainError }}</p>
-        <button type="button" @click="loadDomains">Retry</button>
-      </div>
-
-      <div v-else-if="domains.length === 0" class="panel empty-state">
-        <h2>No receiving domains are available</h2>
-        <p>Try again later or ask the site administrator to enable a domain.</p>
-        <button type="submit" disabled>Open inbox</button>
-      </div>
-
-      <form v-else class="panel address-form" @submit.prevent="submit">
-        <div class="panel-heading">
-          <h2>Create an address</h2>
-          <button class="text-button" type="button" @click="randomize">Random name</button>
-        </div>
-
-        <div class="address-fields">
-          <div class="field local-field">
-            <label for="local-part">Address name</label>
-            <input
-              id="local-part"
-              v-model="localPart"
-              name="local-part"
-              autocomplete="off"
-              autocapitalize="none"
-              minlength="1"
-              maxlength="64"
-              pattern="[A-Za-z0-9](?:[A-Za-z0-9._+\-]*[A-Za-z0-9])?"
-              required
-            >
-          </div>
-          <span class="at-sign" aria-hidden="true">@</span>
-          <div class="field domain-field">
-            <label for="domain">Receiving domain</label>
-            <select id="domain" v-model="selectedDomain" name="domain" required>
-              <option v-for="domain in domains" :key="domain.id" :value="domain.domain">
-                {{ domain.domain }}
-              </option>
-            </select>
-          </div>
-        </div>
-
-        <div class="address-preview">
-          <span>{{ address || 'Your address appears here' }}</span>
-          <button class="text-button" type="button" :disabled="!address" @click="copyAddress">
-            {{ copied ? 'Copied' : 'Copy' }}
+    <section class="saved-inboxes remembered" aria-labelledby="remembered-title">
+      <h2 id="remembered-title">Saved inboxes</h2>
+      <ul v-if="sessions.length">
+        <li v-for="session in sessions" :key="session.address">
+          <button class="saved-address" type="button" @click="emit('open', session)">
+            {{ session.address }}
           </button>
+          <button class="forget-button" type="button" :aria-label="`Forget ${session.address}`" @click="forget(session.address)">
+            Forget
+          </button>
+        </li>
+      </ul>
+      <p v-else class="empty-copy">Addresses you open on this device will appear here.</p>
+    </section>
+
+    <div class="address-detail">
+      <div class="address-intro">
+        <p class="eyebrow">Temporary inbox</p>
+        <h1 id="address-title">Receive mail. Keep your address.</h1>
+        <p class="lede">Choose a name, open the inbox, and leave no account behind.</p>
+      </div>
+
+      <div class="address-workspace">
+        <div v-if="loadingDomains" class="panel loading-panel" aria-live="polite">
+          <span class="skeleton skeleton-label" />
+          <span class="skeleton skeleton-field" />
+          <span class="skeleton skeleton-button" />
+          <span class="sr-only">Loading receiving domains</span>
         </div>
 
-        <p class="form-error" aria-live="polite">{{ error || initialError }}</p>
-        <button class="primary-button" type="submit" :disabled="submitting || !address">
-          {{ submitting ? 'Opening inbox' : 'Open inbox' }}
-        </button>
-      </form>
+        <div v-else-if="domainError" class="panel empty-state" role="alert">
+          <h2>Domains could not be loaded</h2>
+          <p>{{ domainError }}</p>
+          <button type="button" @click="loadDomains">Retry</button>
+        </div>
 
-      <section v-if="sessions.length" class="remembered" aria-labelledby="remembered-title">
-        <h2 id="remembered-title">Remembered inboxes</h2>
-        <ul>
-          <li v-for="session in sessions" :key="session.address">
-            <button class="saved-address" type="button" @click="emit('open', session)">
-              {{ session.address }}
+        <div v-else-if="domains.length === 0" class="panel empty-state">
+          <h2>No receiving domains are available</h2>
+          <p>Try again later or ask the site administrator to enable a domain.</p>
+          <button type="submit" disabled>Open inbox</button>
+        </div>
+
+        <form v-else class="panel address-form" @submit.prevent="submit">
+          <div class="panel-heading">
+            <h2>Create an address</h2>
+            <button class="text-button" type="button" @click="randomize">Random name</button>
+          </div>
+
+          <div class="address-fields">
+            <div class="field local-field">
+              <label for="local-part">Address name</label>
+              <input
+                id="local-part"
+                v-model="localPart"
+                name="local-part"
+                autocomplete="off"
+                autocapitalize="none"
+                minlength="1"
+                maxlength="64"
+                pattern="[A-Za-z0-9](?:[A-Za-z0-9._+\-]*[A-Za-z0-9])?"
+                required
+              >
+            </div>
+            <span class="at-sign" aria-hidden="true">@</span>
+            <div class="field domain-field">
+              <label for="domain">Receiving domain</label>
+              <select id="domain" v-model="selectedDomain" name="domain" required>
+                <option v-for="domain in domains" :key="domain.id" :value="domain.domain">
+                  {{ domain.domain }}
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div class="address-preview">
+            <span>{{ address || 'Your address appears here' }}</span>
+            <button class="text-button" type="button" :disabled="!address" @click="copyAddress">
+              {{ copied ? 'Copied' : 'Copy' }}
             </button>
-            <button class="forget-button" type="button" :aria-label="`Forget ${session.address}`" @click="forget(session.address)">
-              Forget
-            </button>
-          </li>
-        </ul>
-      </section>
+          </div>
+
+          <p class="form-error" aria-live="polite">{{ error || initialError }}</p>
+          <button class="primary-button" type="submit" :disabled="submitting || !address">
+            {{ submitting ? 'Opening inbox' : 'Open inbox' }}
+          </button>
+        </form>
+      </div>
     </div>
   </section>
 </template>

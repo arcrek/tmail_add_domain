@@ -6,6 +6,7 @@ import SandboxFrame from './SandboxFrame.vue'
 
 const props = defineProps<{ token: string; id: string }>()
 const emit = defineEmits<{
+  close: []
   deleted: [id: string]
   seen: [id: string]
   stale: [id: string]
@@ -178,6 +179,9 @@ onBeforeUnmount(() => { requestVersion += 1 })
 
 <template>
   <article class="message-reader" aria-live="polite">
+    <button class="reader-back secondary-button" type="button" data-action="close" @click="emit('close')">
+      Back to inbox
+    </button>
     <div v-if="loading" class="reader-loading">
       <span class="skeleton skeleton-label" />
       <span class="skeleton skeleton-title" />

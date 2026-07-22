@@ -1,20 +1,23 @@
 :root {
   color-scheme: light;
-  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-  font-synthesis: none;
-  --paper: #f4f1e8;
-  --paper-raised: #fbf9f2;
-  --ink: #24231f;
-  --muted: #65635c;
-  --line: #b8b3a7;
-  --primary: #45478f;
-  --accent: #34366f;
+  font-family: Arial, Helvetica, sans-serif;
+  --canvas: #f8f9fb;
+  --surface: #ffffff;
+  --surface-selected: #eef3ff;
+  --ink: #111827;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --primary: #2448c8;
+  --accent: #17379e;
+  --green: #169b55;
+  --red: #d9363e;
+  --radius: 5px;
+  /* Keep the admin surface stable until its separate redesign task. */
+  --paper: var(--canvas);
+  --paper-raised: var(--surface);
   --indigo: var(--primary);
   --indigo-dark: var(--accent);
-  --green: #2f6b4f;
-  --red: #96373a;
-  --radius: 3px;
-  background: var(--paper);
+  background: var(--canvas);
   color: var(--ink);
 }
 
@@ -24,14 +27,14 @@
 
 html {
   min-width: 320px;
-  background: var(--paper);
+  background: var(--canvas);
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100dvh;
-  background: var(--paper);
+  background: var(--canvas);
 }
 
 button,
@@ -50,6 +53,9 @@ select {
 
 button {
   cursor: pointer;
+  min-height: 2.35rem;
+  border-radius: var(--radius);
+  transition: background-color 0.18s ease, transform 0.18s ease;
 }
 
 button:disabled {
@@ -90,43 +96,9 @@ h2 {
 }
 
 .app-frame {
-  width: min(100%, 1440px);
+  width: 100%;
   min-height: 100dvh;
-  margin: 0 auto;
-  border-right: 1px solid var(--line);
-  border-left: 1px solid var(--line);
-}
-
-.site-header,
-.site-footer {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  align-items: center;
-  min-height: 68px;
-  padding: 0 2rem;
-  border-bottom: 1px solid var(--line);
-}
-
-.brand {
-  grid-column: span 3;
-  width: max-content;
-  color: var(--ink);
-  font-size: 1.25rem;
-  font-weight: 750;
-  letter-spacing: -0.08em;
-  text-decoration: none;
-}
-
-.brand img {
-  display: block;
-  width: auto;
-  max-width: 9rem;
-  height: 2rem;
-  object-fit: contain;
-}
-
-.brand img + span {
-  margin-left: 0.6rem;
+  background: var(--surface);
 }
 
 .cookie-notice {
@@ -136,45 +108,150 @@ h2 {
   background: var(--paper-raised);
 }
 
-.site-header nav {
-  display: flex;
-  grid-column: 9 / -1;
-  justify-content: flex-end;
-  gap: 1.75rem;
-  white-space: nowrap;
-}
-
-.site-header nav a,
-.site-footer a {
-  color: var(--muted);
-  font-size: 0.83rem;
-  font-weight: 650;
-}
-
 main {
-  min-height: calc(100dvh - 137px);
+  min-height: 100dvh;
 }
 
-.address-layout {
+.three-pane {
   display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  min-height: calc(100dvh - 137px);
+  grid-template-columns: minmax(13.5rem, 0.72fr) minmax(18rem, 0.9fr) minmax(28rem, 1.9fr);
+  min-height: 100dvh;
+  background: var(--surface);
 }
 
-.address-intro {
-  grid-column: span 7;
-  padding: clamp(3rem, 7vw, 7rem) clamp(2rem, 5vw, 5rem);
+.account-rail,
+.message-list,
+.saved-inboxes {
+  min-width: 0;
   border-right: 1px solid var(--line);
 }
 
-.address-workspace {
+.account-rail {
   display: flex;
-  grid-column: span 5;
   flex-direction: column;
-  justify-content: center;
+  gap: 1rem;
+  padding: 1.25rem 1rem;
+}
+
+.rail-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 2.25rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.rail-brand img {
+  width: 1.75rem;
+  height: 1.75rem;
+  object-fit: contain;
+}
+
+.address-card,
+.api-status {
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.address-card {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.address-card strong {
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+}
+
+.address-card small,
+.toolbar-notice {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.rail-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 0.5rem;
+}
+
+.notification-button {
+  width: 100%;
+}
+
+.rail-nav {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.rail-nav a,
+.rail-nav span {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.68rem 0.75rem;
+  border-radius: var(--radius);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.rail-nav [aria-current="page"] {
+  color: var(--primary);
+  background: var(--surface-selected);
+  font-weight: 700;
+}
+
+.api-status {
+  margin-top: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.api-status i {
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-right: 0.35rem;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.api-status strong {
+  display: block;
+  margin: 0.3rem 0 0 0.85rem;
+  color: var(--green);
+}
+
+.rail-signout {
+  border: 0;
+  padding: 0.7rem;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+}
+
+.saved-inboxes {
+  padding: 1.25rem 1rem;
+}
+
+.address-detail {
+  display: grid;
+  align-content: center;
   gap: 2rem;
-  padding: clamp(2rem, 5vw, 4.5rem);
-  background: #eeeadf;
+  padding: clamp(2rem, 7vw, 6rem);
+}
+
+.address-intro h1 {
+  max-width: 15ch;
+  margin-bottom: 1rem;
+  font-size: clamp(2.2rem, 5vw, 4.5rem);
+}
+
+.address-workspace {
+  display: grid;
+  gap: 2rem;
 }
 
 .eyebrow {
@@ -195,10 +272,9 @@ main {
 }
 
 .panel {
-  border: 1px solid var(--ink);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--paper-raised);
-  box-shadow: 3px 3px 0 rgb(36 35 31 / 0.12);
+  background: var(--surface);
 }
 
 .address-form,
@@ -232,7 +308,7 @@ main {
 }
 
 .field label {
-  color: #55534d;
+  color: var(--muted);
   font-size: 0.78rem;
   font-weight: 700;
 }
@@ -242,8 +318,8 @@ select,
 textarea {
   width: 100%;
   min-height: 46px;
-  border: 1px solid #69665e;
-  background: #fffdf7;
+  border: 1px solid var(--line);
+  background: var(--surface);
   color: var(--ink);
   padding: 0.7rem 0.8rem;
   border-radius: var(--radius);
@@ -287,20 +363,21 @@ textarea {
 
 .primary-button,
 .secondary-button {
-  min-height: 46px;
-  border: 1px solid var(--indigo-dark);
+  min-height: 2.35rem;
   padding: 0.75rem 1.2rem;
   font-weight: 750;
   white-space: nowrap;
 }
 
 .primary-button {
-  background: var(--indigo);
-  color: #fffdf7;
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: #fff;
 }
 
 .secondary-button {
-  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  background: var(--surface);
   color: var(--ink);
 }
 
@@ -318,8 +395,7 @@ textarea {
 }
 
 .remembered {
-  border-top: 1px solid var(--line);
-  padding-top: 1.5rem;
+  border-top: 0;
 }
 
 .remembered ul {
@@ -724,38 +800,6 @@ th {
   min-height: 90px;
 }
 
-.inbox-view {
-  min-height: calc(100dvh - 137px);
-}
-
-.inbox-toolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 7fr) minmax(25rem, 5fr);
-  align-items: end;
-  gap: 1.5rem;
-  padding: 1.6rem 2rem;
-  border-bottom: 1px solid var(--line);
-}
-
-.inbox-toolbar .eyebrow {
-  margin-bottom: 0.7rem;
-}
-
-.inbox-toolbar h1 {
-  max-width: 100%;
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-size: clamp(1.55rem, 3.5vw, 2.8rem);
-  letter-spacing: -0.045em;
-  line-height: 1;
-}
-
-.inbox-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.6rem;
-}
-
 .compact-button {
   min-height: 38px;
   padding: 0.55rem 0.8rem;
@@ -763,30 +807,20 @@ th {
 }
 
 .toolbar-notice {
-  grid-column: 1 / -1;
   margin: 0;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.inbox-grid {
-  display: grid;
-  grid-template-columns: minmax(19rem, 4fr) minmax(0, 8fr);
-  min-height: calc(100dvh - 258px);
 }
 
 .message-list {
-  border-right: 1px solid var(--line);
-  background: #eeeadf;
+  background: var(--surface);
 }
 
 .list-heading {
   display: flex;
-  min-height: 70px;
+  min-height: 4.7rem;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1rem 1.2rem;
+  padding: 1.25rem 1rem;
   border-bottom: 1px solid var(--line);
 }
 
@@ -832,20 +866,20 @@ th {
   border: 0;
   border-bottom: 1px solid var(--line);
   border-radius: 0;
-  padding: 1rem 1.2rem;
-  background: transparent;
+  padding: 1rem;
+  background: var(--surface);
   color: var(--ink);
   text-align: left;
 }
 
 .message-row:hover,
 .message-row.selected {
-  background: #e2dfd7;
+  background: var(--surface-selected);
 }
 
 .message-row.unread {
-  border-left: 3px solid var(--indigo);
-  padding-left: calc(1.2rem - 3px);
+  border-left: 3px solid var(--primary);
+  padding-left: calc(1rem - 3px);
 }
 
 .message-row-top {
@@ -912,14 +946,20 @@ th {
   font-size: 0.72rem;
 }
 
-.message-reader,
-.reader-placeholder {
+.mail-detail {
   min-width: 0;
-  background: var(--paper-raised);
+  overflow: auto;
+  background: var(--surface);
 }
 
 .message-reader {
-  padding: clamp(1.3rem, 3vw, 2.5rem);
+  padding: 1.5rem 1.75rem;
+}
+
+.reader-placeholder {
+  min-width: 0;
+  min-height: 100%;
+  background: var(--surface);
 }
 
 .reader-placeholder,
@@ -954,8 +994,14 @@ th {
 .reader-header h2 {
   max-width: 28ch;
   margin: 0.35rem 0 0.6rem;
-  font-size: clamp(1.45rem, 3vw, 2.3rem);
+  font-size: 1.3rem;
+  letter-spacing: -0.025em;
   line-height: 1.1;
+}
+
+.reader-back {
+  display: none;
+  margin-bottom: 1rem;
 }
 
 .reader-sender,
@@ -1065,7 +1111,7 @@ th {
 
 .sandbox-frame {
   width: 100%;
-  min-height: 28rem;
+  min-height: 31rem;
   border: 1px solid var(--line);
   background: #fff;
 }
@@ -1101,23 +1147,6 @@ th {
   white-space: pre-wrap;
 }
 
-.site-footer {
-  min-height: 69px;
-  border-top: 1px solid var(--line);
-  border-bottom: 0;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.site-footer span {
-  grid-column: span 6;
-}
-
-.site-footer a {
-  grid-column: 10 / -1;
-  justify-self: end;
-}
-
 .primary-button:hover:not(:disabled) {
   background: var(--indigo-dark);
 }
@@ -1144,45 +1173,52 @@ button:active:not(:disabled) {
   border: 0;
 }
 
-@media (max-width: 799px) {
-  .app-frame {
-    border: 0;
+@media (max-width: 900px) {
+  .three-pane {
+    grid-template-columns: 12rem minmax(17rem, 1fr);
   }
 
-  .site-header,
-  .site-footer {
-    grid-template-columns: 1fr auto;
-    padding: 0 1rem;
+  .mail-detail,
+  .address-detail {
+    grid-column: 2;
   }
 
-  .brand,
-  .site-header nav,
-  .site-footer span,
-  .site-footer a {
-    grid-column: auto;
+  .inbox-view .mail-detail:has(.message-reader) {
+    position: fixed;
+    inset: 0;
+    z-index: 2;
   }
 
-  .site-header nav {
-    gap: 1rem;
+  .reader-back {
+    display: inline-flex;
+    align-items: center;
   }
+}
 
-  .address-layout {
+@media (max-width: 640px) {
+  .three-pane {
     display: block;
+    min-height: 100dvh;
   }
 
-  .address-intro {
-    padding: 3.5rem 1rem;
+  .account-rail {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
 
-  .address-workspace {
-    padding: 2rem 1rem 3.5rem;
+  .message-list,
+  .saved-inboxes {
+    border-right: 0;
   }
 
-  h1 {
-    max-width: 18ch;
-    font-size: clamp(2.65rem, 13vw, 4.4rem);
+  .address-detail,
+  .message-reader {
+    padding: 1rem;
+  }
+
+  .reader-header {
+    display: grid;
+    gap: 1rem;
   }
 
   .address-fields {
@@ -1193,41 +1229,15 @@ button:active:not(:disabled) {
     display: none;
   }
 
-  .inbox-toolbar {
-    display: block;
-    padding: 1.5rem 1rem;
-  }
-
-  .inbox-actions {
-    justify-content: flex-start;
+  .reader-actions {
     flex-wrap: wrap;
-    margin-top: 1.2rem;
   }
 
-  .toolbar-notice {
-    margin-top: 0.8rem;
-  }
-
-  .inbox-grid {
-    display: block;
-  }
-
-  .message-list {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .reader-header,
   .attachments li {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .reader-actions {
-    flex-wrap: wrap;
-  }
-
-  .message-reader,
   .reader-placeholder,
   .reader-state {
     padding: 1.5rem 1rem 3rem;
@@ -1304,6 +1314,6 @@ button:active:not(:disabled) {
   *::before,
   *::after {
     scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
+    transition: none !important;
   }
 }
