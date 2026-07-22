@@ -29,9 +29,9 @@ _jmap_lock = threading.Lock()
 
 def _runtime():
     global _config, _jmap, _jmap_fingerprint
-    config = _config_store.get()
-    fingerprint = (config.jmap_url, config.jmap_token, config.catchall_address)
     with _jmap_lock:
+        config = _config_store.get()
+        fingerprint = (config.jmap_url, config.jmap_token, config.catchall_address)
         if _jmap is None or fingerprint != _jmap_fingerprint:
             _jmap = JmapClient(*fingerprint)
             _jmap_fingerprint = fingerprint

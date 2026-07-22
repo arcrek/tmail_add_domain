@@ -437,6 +437,7 @@ def create_app(config_path: str) -> FastAPI:
     app.state.jmap = JmapClient(cfg.jmap_url, cfg.jmap_token, cfg.catchall_address)
     app.state.domain_cache = DomainCache(cfg.cache_file)
     app.state.domain_cache.load()
+    app.state.admin_lock = threading.Lock()
 
     limiter = _FixedWindowLimiter(limit=10, seconds=60)
 

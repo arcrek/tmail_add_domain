@@ -6,11 +6,12 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import re
 import secrets
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
-from src.api_auth import AddressValidationError, _domain, active_domains
+from src.api_auth import AddressValidationError, _LOCAL_PART, _domain, active_domains
 from src.jmap_client import JmapClient
 
 
@@ -148,13 +149,21 @@ def _validate_mail(values: dict[str, object]) -> dict[str, object]:
     result = dict(values)
     for key in ("jmap_url", "jmap_token", "catchall_address", "mail_account_id"):
         result[key] = _string(result[key], key).strip()
-    if not result["jmap_url"].startswith(("http://", "https://")) or not result["jmap_token"]:
+    try:
+        parsed_url = urlsplit(result["jmap_url"])
+        valid_url = parsed_url.scheme in {"http", "https"} and bool(parsed_url.hostname)
+    except ValueError:
+        valid_url = False
+    if not valid_url or not result["jmap_token"]:
         raise HTTPException(422, "JMAP URL and token are required")
-    local, separator, domain = result["catchall_address"].rpartition("@")
-    if not separator or not local:
+    if result["catchall_address"].count("@") != 1:
+        raise HTTPException(422, "catchall_address must be an email address")
+    local, domain = result["catchall_address"].split("@")
+    local = local.lower()
+    if not _LOCAL_PART.fullmatch(local):
         raise HTTPException(422, "catchall_address must be an email address")
     try:
-        result["catchall_address"] = f"{local.lower()}@{_domain(domain)}"
+        result["catchall_address"] = f"{local}@{_domain(domain)}"
     except AddressValidationError:
         raise HTTPException(422, "catchall_address must be an email address") from None
     result["retention_days"] = _integer(result["retention_days"], 1, 3650, "retention_days")
@@ -185,7 +194,7 @@ def login(request: Request, body: dict[str, object] = Body(...)):
     response = JSONResponse({"csrfToken": csrf_token})
     response.set_cookie(
         "tmail_admin", session_token, max_age=12 * 60 * 60,
-        httponly=True, samesite="strict", path="/admin",
+        httponly=True, secure=True, samesite="strict", path="/admin",
     )
     return response
 
@@ -223,54 +232,60 @@ def update_settings(
     site_updates = _section(body, "site", SITE_KEYS)
     mail_updates = _section(body, "mailServer", MAIL_KEYS)
     state = request.app.state.state_store
-    current_site = state.get_settings()
-    validated_site = _validate_site(current_site | site_updates)
+    with request.app.state.admin_lock:
+        current_site = state.get_settings()
+        validated_site = _validate_site(current_site | site_updates)
 
-    current_config = request.app.state.config_store.get()
-    current_mail = {key: getattr(current_config, key) for key in MAIL_KEYS}
-    if mail_updates.get("jmap_token") in {"", MASKED_SECRET}:
-        mail_updates.pop("jmap_token")
-    validated_mail = _validate_mail(current_mail | mail_updates)
+        current_config = request.app.state.config_store.get()
+        current_mail = {key: getattr(current_config, key) for key in MAIL_KEYS}
+        if mail_updates.get("jmap_token") in {"", MASKED_SECRET}:
+            mail_updates.pop("jmap_token")
+        validated_mail = _validate_mail(current_mail | mail_updates)
 
-    if mail_updates:
-        saved = request.app.state.config_store.update({key: validated_mail[key] for key in mail_updates})
-        request.app.state.jmap = JmapClient(saved.jmap_url, saved.jmap_token, saved.catchall_address)
-    if site_updates:
-        if current_site["auto_sync_domains"] and not validated_site["auto_sync_domains"]:
-            state.replace_frozen_domains(_active_domains(request, current_site))
-        state.update_settings({key: validated_site[key] for key in site_updates})
+        if mail_updates:
+            saved = request.app.state.config_store.update({key: validated_mail[key] for key in mail_updates})
+            request.app.state.jmap = JmapClient(saved.jmap_url, saved.jmap_token, saved.catchall_address)
+        if site_updates:
+            if current_site["auto_sync_domains"] and not validated_site["auto_sync_domains"]:
+                state.replace_frozen_domains(_active_domains(request, current_site))
+            state.update_settings({key: validated_site[key] for key in site_updates})
     return settings(request, _session_value)
 
 
 @router.post("/sync-domains")
 def sync_domains(request: Request, _session_value: dict[str, object] = Depends(_csrf)):
     state = request.app.state.state_store
+    with request.app.state.admin_lock:
+        jmap = request.app.state.jmap
     try:
-        values = request.app.state.jmap.list_domains()
+        values = jmap.list_domains()
         if not values:
             raise ValueError("Stalwart returned no domains")
         domains = _list(values, "domains", _domain)
         if not domains:
             raise ValueError("Stalwart returned no valid domains")
+        with request.app.state.admin_lock:
+            request.app.state.domain_cache.replace(domains)
+            if not state.get_settings()["auto_sync_domains"]:
+                state.replace_frozen_domains(domains)
+            state.record_sync(True, f"{len(domains)} domains")
     except Exception as exc:
         state.record_sync(False, type(exc).__name__)
         raise HTTPException(502, "Domain sync failed") from None
-    request.app.state.domain_cache.replace(domains)
-    if not state.get_settings()["auto_sync_domains"]:
-        state.replace_frozen_domains(domains)
-    state.record_sync(True, f"{len(domains)} domains")
     return {"domains": domains, "lastSync": state.last_sync()}
 
 
 @router.post("/test-mail")
 def test_mail(request: Request, _session_value: dict[str, object] = Depends(_csrf)):
+    with request.app.state.admin_lock:
+        config = request.app.state.config_store.get()
+        jmap = request.app.state.jmap
     try:
-        domains = request.app.state.jmap.list_domains()
+        domains = jmap.list_domains()
         if domains is None:
             raise ValueError("Invalid domain response")
-        config = request.app.state.config_store.get()
-        account_id = config.mail_account_id or request.app.state.jmap.discover_mail_account_id()
-        messages = request.app.state.jmap.message_counts(account_id)
+        account_id = config.mail_account_id or jmap.discover_mail_account_id()
+        messages = jmap.message_counts(account_id)
     except Exception:
         raise HTTPException(502, "Mail connection failed") from None
     return {"ok": True, "domainCount": len(domains), "messages": messages}
@@ -278,15 +293,17 @@ def test_mail(request: Request, _session_value: dict[str, object] = Depends(_csr
 
 @router.get("/dashboard")
 def dashboard(request: Request, _session_value: dict[str, object] = Depends(_session)):
-    config = request.app.state.config_store.get()
-    account_id = config.mail_account_id or request.app.state.jmap.discover_mail_account_id()
+    with request.app.state.admin_lock:
+        config = request.app.state.config_store.get()
+        jmap = request.app.state.jmap
+    account_id = config.mail_account_id or jmap.discover_mail_account_id()
     site = request.app.state.state_store.get_settings()
     domains = {
         "active": len(_active_domains(request, site)),
         **request.app.state.state_store.activity_summary(),
     }
     return {
-        "messages": request.app.state.jmap.message_counts(account_id),
+        "messages": jmap.message_counts(account_id),
         "domains": domains,
         "autoSyncDomains": site["auto_sync_domains"],
         "lastSync": request.app.state.state_store.last_sync(),

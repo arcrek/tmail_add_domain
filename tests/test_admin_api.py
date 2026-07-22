@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from types import SimpleNamespace
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -50,7 +52,7 @@ def fake_jmap():
 def client(config_path, fake_jmap):
     app = create_app(str(config_path))
     app.state.jmap = fake_jmap
-    with TestClient(app, raise_server_exceptions=False) as test_client:
+    with TestClient(app, base_url="https://testserver", raise_server_exceptions=False) as test_client:
         yield test_client
 
 
@@ -69,6 +71,7 @@ def test_admin_login_sets_http_only_cookie(client):
     cookie = response.headers["set-cookie"]
     assert "HttpOnly" in cookie
     assert "SameSite=strict" in cookie
+    assert "Secure" in cookie
 
 
 def test_wrong_password_is_rejected(client):
@@ -121,6 +124,18 @@ def test_csrf_mismatch_is_rejected(admin_client):
 def test_setting_bounds_are_rejected(admin_client, site):
     response = admin_client.put(
         "/admin/api/settings", json={"site": site}, headers=admin_client.csrf
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("mail", [
+    {"jmapUrl": "https:///missing-host"},
+    {"jmapUrl": "http://"},
+    {"catchallAddress": "bad@@example.com"},
+])
+def test_malformed_mail_settings_are_rejected(admin_client, mail):
+    response = admin_client.put(
+        "/admin/api/settings", json={"mailServer": mail}, headers=admin_client.csrf
     )
     assert response.status_code == 422
 
@@ -206,6 +221,151 @@ def test_failed_sync_keeps_working_cache(admin_client, fake_jmap, cache_file, re
     assert response.status_code == 502
     assert json.loads(cache_file.read_text()) == ["old.example"]
     assert admin_client.app.state.state_store.last_sync()["success"] is False
+
+
+def test_sync_persistence_failure_keeps_cache_and_records_failure(
+    admin_client, fake_jmap, cache_file, monkeypatch
+):
+    fake_jmap.list_domains.return_value = ["new.example"]
+    monkeypatch.setattr(
+        "src.domain_cache.os.replace", MagicMock(side_effect=OSError("disk full"))
+    )
+    response = admin_client.post("/admin/api/sync-domains", headers=admin_client.csrf)
+    assert response.status_code == 502
+    assert admin_client.app.state.domain_cache.domains() == ["old.example"]
+    assert json.loads(cache_file.read_text()) == ["old.example"]
+    assert admin_client.app.state.state_store.last_sync()["success"] is False
+
+
+def test_disable_and_sync_commit_in_one_order(admin_client, fake_jmap, monkeypatch):
+    from src import admin_api
+
+    request = SimpleNamespace(app=admin_client.app)
+    snapshot_read = threading.Event()
+    release_disable = threading.Event()
+    sync_done = threading.Event()
+    errors = []
+    real_active_domains = admin_api._active_domains
+
+    def paused_active_domains(request, settings=None):
+        domains = real_active_domains(request, settings)
+        if settings and settings["auto_sync_domains"]:
+            snapshot_read.set()
+            release_disable.wait(2)
+        return domains
+
+    monkeypatch.setattr(admin_api, "_active_domains", paused_active_domains)
+    fake_jmap.list_domains.return_value = ["new.example"]
+
+    def disable():
+        try:
+            admin_api.update_settings(request, {"site": {"autoSyncDomains": False}}, {})
+        except Exception as exc:
+            errors.append(exc)
+
+    def sync():
+        try:
+            admin_api.sync_domains(request, {})
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            sync_done.set()
+
+    disable_thread = threading.Thread(target=disable)
+    sync_thread = threading.Thread(target=sync)
+    disable_thread.start()
+    assert snapshot_read.wait(1)
+    sync_thread.start()
+    sync_done.wait(0.5)
+    release_disable.set()
+    disable_thread.join(2)
+    sync_thread.join(2)
+
+    assert not errors
+    assert not disable_thread.is_alive() and not sync_thread.is_alive()
+    assert admin_client.app.state.state_store.get_frozen_domains() == ["new.example"]
+
+
+def test_newer_mail_config_cannot_leave_older_client_installed(
+    admin_client, monkeypatch
+):
+    from src import admin_api
+
+    request = SimpleNamespace(app=admin_client.app)
+    older_build_started = threading.Event()
+    release_older_build = threading.Event()
+    newer_done = threading.Event()
+    errors = []
+
+    def client(url, _token, _catchall):
+        value = SimpleNamespace(url=url)
+        if "older" in url:
+            older_build_started.set()
+            release_older_build.wait(2)
+        return value
+
+    monkeypatch.setattr(admin_api, "JmapClient", client)
+
+    def update(url, done=None):
+        try:
+            admin_api.update_settings(
+                request, {"mailServer": {"jmapUrl": url}}, {}
+            )
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            if done:
+                done.set()
+
+    older = threading.Thread(target=update, args=("https://older.example/jmap",))
+    newer = threading.Thread(
+        target=update, args=("https://newer.example/jmap", newer_done)
+    )
+    older.start()
+    assert older_build_started.wait(1)
+    newer.start()
+    newer_done.wait(0.5)
+    release_older_build.set()
+    older.join(2)
+    newer.join(2)
+
+    assert not errors
+    assert not older.is_alive() and not newer.is_alive()
+    assert admin_client.app.state.config_store.get().jmap_url == "https://newer.example/jmap"
+    assert admin_client.app.state.jmap.url == "https://newer.example/jmap"
+
+
+def test_test_mail_uses_one_jmap_snapshot(admin_client, fake_jmap):
+    replacement = MagicMock()
+    replacement.message_counts.return_value = {"stored": 99, "today": 99, "sevenDays": 99}
+
+    def swap_client():
+        admin_client.app.state.jmap = replacement
+        return ["old.example"]
+
+    fake_jmap.list_domains.side_effect = swap_client
+    response = admin_client.post("/admin/api/test-mail", headers=admin_client.csrf)
+    assert response.status_code == 200
+    fake_jmap.message_counts.assert_called_once_with("mail-account")
+    replacement.message_counts.assert_not_called()
+
+
+def test_dashboard_uses_one_jmap_snapshot(admin_client, fake_jmap, monkeypatch):
+    replacement = MagicMock()
+    replacement.message_counts.return_value = {"stored": 99, "today": 99, "sevenDays": 99}
+    state = admin_client.app.state.state_store
+    real_get_settings = state.get_settings
+
+    def swap_client():
+        settings = real_get_settings()
+        admin_client.app.state.jmap = replacement
+        return settings
+
+    monkeypatch.setattr(state, "get_settings", swap_client)
+    response = admin_client.get("/admin/api/dashboard")
+    assert response.status_code == 200
+    fake_jmap.message_counts.assert_called_once_with("mail-account")
+    replacement.message_counts.assert_not_called()
 
 
 def test_failed_jmap_test_returns_bad_gateway(admin_client, fake_jmap):

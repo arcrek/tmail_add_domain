@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import os
 import pytest
+from unittest.mock import MagicMock
 from src.domain_cache import DomainCache
 
 def test_empty_on_missing_file(tmp_path):
@@ -64,3 +65,17 @@ def test_domains_are_sorted_copies_and_replace_persists(tmp_path):
     assert cache.domains() == ["c.com", "d.com"]
     with open(path) as f:
         assert json.load(f) == ["c.com", "d.com"]
+
+
+def test_replace_failure_keeps_memory_and_file(tmp_path, monkeypatch):
+    path = tmp_path / "domains.json"
+    path.write_text('["old.example"]')
+    cache = DomainCache(str(path))
+    cache.load()
+    monkeypatch.setattr("src.domain_cache.os.replace", MagicMock(side_effect=OSError("disk full")))
+
+    with pytest.raises(OSError, match="disk full"):
+        cache.replace(["new.example"])
+
+    assert cache.domains() == ["old.example"]
+    assert json.loads(path.read_text()) == ["old.example"]

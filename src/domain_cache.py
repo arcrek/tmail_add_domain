@@ -37,12 +37,13 @@ class DomainCache:
 
     def replace(self, domains: list[str]) -> None:
         with self._lock:
-            self._domains = set(domains)
-            self._persist()
+            replacement = set(domains)
+            self._persist(replacement)
+            self._domains = replacement
 
-    def _persist(self) -> None:
+    def _persist(self, domains: set | None = None) -> None:
         tmp = self._file + ".tmp"
         os.makedirs(os.path.dirname(os.path.abspath(self._file)), exist_ok=True)
         with open(tmp, "w") as f:
-            json.dump(sorted(self._domains), f)
+            json.dump(sorted(self._domains if domains is None else domains), f)
         os.replace(tmp, self._file)

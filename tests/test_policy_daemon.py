@@ -1,5 +1,7 @@
 from __future__ import annotations
 import io
+from types import SimpleNamespace
+import threading
 import pytest
 from unittest.mock import MagicMock, patch
 import src.policy_daemon as pd
@@ -118,3 +120,58 @@ def test_changed_mail_config_rebuilds_jmap_client():
     )
     assert pd._jmap is rebuilt
     assert pd._jmap is not old_jmap
+
+
+def test_older_policy_read_cannot_reinstall_stale_jmap(monkeypatch):
+    _cache, _jmap, _state = _setup(known={"example.com"})
+    old_config = SimpleNamespace(
+        jmap_url="https://older.example/jmap",
+        jmap_token="older-token",
+        catchall_address="older@example.com",
+    )
+    new_config = SimpleNamespace(
+        jmap_url="https://newer.example/jmap",
+        jmap_token="newer-token",
+        catchall_address="newer@example.com",
+    )
+    old_read_started = threading.Event()
+    release_old_read = threading.Event()
+    new_done = threading.Event()
+    errors = []
+
+    def get_config():
+        if threading.current_thread().name == "older-policy-read":
+            old_read_started.set()
+            release_old_read.wait(2)
+            return old_config
+        return new_config
+
+    def build_client(url, _token, _catchall):
+        return SimpleNamespace(url=url)
+
+    pd._config_store.get.side_effect = get_config
+    monkeypatch.setattr(pd, "_jmap_lock", threading.Lock())
+    monkeypatch.setattr(pd, "JmapClient", build_client)
+
+    def reload(done=None):
+        try:
+            pd._runtime()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            if done:
+                done.set()
+
+    older = threading.Thread(target=reload, name="older-policy-read")
+    newer = threading.Thread(target=reload, args=(new_done,), name="newer-policy-read")
+    older.start()
+    assert old_read_started.wait(1)
+    newer.start()
+    new_done.wait(0.5)
+    release_old_read.set()
+    older.join(2)
+    newer.join(2)
+
+    assert not errors
+    assert not older.is_alive() and not newer.is_alive()
+    assert pd._jmap.url == "https://newer.example/jmap"
