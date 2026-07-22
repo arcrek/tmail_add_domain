@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 
@@ -22,6 +23,7 @@ def _fake_systemctl(tmp_path: Path):
     state = tmp_path / "systemctl-state"
     (state / "enabled").mkdir(parents=True)
     (state / "active").mkdir()
+    (tmp_path / "runtime").mkdir(mode=0o700)
     command = tmp_path / "systemctl"
     command.write_text("""#!/usr/bin/env bash
 set -eu
@@ -36,7 +38,10 @@ case "$command" in
     start) for unit in "$@"; do : > "$FAKE_SYSTEMD_STATE/active/$unit"; done ;;
     stop) for unit in "$@"; do rm -f "$FAKE_SYSTEMD_STATE/active/$unit"; done ;;
     restart)
-        [ "$1" != tmail-api.service ] || [ ! -e "$FAKE_SYSTEMD_STATE/fail-api" ] || exit 42
+        if [ "$1" = tmail-api.service ] && [ -e "$FAKE_SYSTEMD_STATE/fail-api" ]; then
+            [ -f "$FAKE_RUNTIME_CONFIG" ] || exit 44
+            exit 42
+        fi
         : > "$FAKE_SYSTEMD_STATE/active/$1"
         ;;
     daemon-reload|status) ;;
@@ -45,14 +50,16 @@ esac
 """)
     command.chmod(0o755)
 
-    chown = tmp_path / "chown"
-    chown.write_text("""#!/usr/bin/env bash
+    runuser = tmp_path / "runuser"
+    runuser.write_text("""#!/usr/bin/env bash
 set -eu
-target=${!#}
-[ -f "$target" ] || exit 43
-printf '%s\n' "$*" >> "$FAKE_SYSTEMD_STATE/chown-log"
+[ "$1" = -u ]
+shift 2
+[ "$1" = -- ]
+shift
+exec "$@"
 """)
-    chown.chmod(0o755)
+    runuser.chmod(0o755)
     return command, state
 
 
@@ -61,9 +68,11 @@ def _release_tree(tmp_path: Path):
     live = tmp_path / "live"
     systemd = tmp_path / "systemd"
     (stage / "deploy").mkdir(parents=True)
+    (stage / "src").mkdir()
     systemd.mkdir()
     (stage / "version").write_text("new")
     (stage / "config.json").write_text("secret")
+    shutil.copy(ROOT / "src" / "config.py", stage / "src" / "config.py")
     for unit in UNITS:
         (stage / "deploy" / unit).write_text(f"new {unit}")
     return stage, live, systemd
@@ -78,7 +87,9 @@ def _run_release(stage, live, systemd, command, state):
             "TMAIL_SYSTEMD_DIR": str(systemd),
             "TMAIL_SYSTEMCTL": str(command),
             "FAKE_SYSTEMD_STATE": str(state),
+            "FAKE_RUNTIME_CONFIG": str(state.parent / "runtime" / "config.json"),
             "PATH": f"{command.parent}:{os.environ['PATH']}",
+            "TMAIL_CONFIG_DIR": str(state.parent / "runtime"),
         },
     )
 
@@ -154,17 +165,60 @@ def test_success_promotes_release_and_restarts_policy_before_api(tmp_path):
     assert not list(tmp_path.glob(".tmail-policy.backup.*"))
 
 
-def test_release_grants_service_ownership_only_to_promoted_config(tmp_path):
+def test_release_migrates_snapshot_to_dedicated_runtime_config(tmp_path):
     stage, live, systemd = _release_tree(tmp_path)
     command, state = _fake_systemctl(tmp_path)
+    snapshot = (stage / "config.json").read_text()
 
     result = _run_release(stage, live, systemd, command, state)
 
     assert result.returncode == 0, result.stderr
-    assert (state / "chown-log").read_text().splitlines() == [
-        f"-- tmail-policy:tmail-policy {live / 'config.json'}",
-    ]
-    assert stat.S_IMODE((live / "config.json").stat().st_mode) == 0o600
+    runtime_config = state.parent / "runtime" / "config.json"
+    assert runtime_config.read_text() == snapshot
+    assert stat.S_IMODE(runtime_config.stat().st_mode) == 0o600
+    assert not (live / "config.json").exists()
+
+
+def test_release_preserves_existing_runtime_config(tmp_path):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+    runtime_config = state.parent / "runtime" / "config.json"
+    runtime_config.write_text("newer live config")
+    runtime_config.chmod(0o600)
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 0, result.stderr
+    assert runtime_config.read_text() == "newer live config"
+    assert not (live / "config.json").exists()
+
+
+def test_failed_release_removes_only_config_created_by_deployment(tmp_path):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+    live.mkdir()
+    (live / "version").write_text("old")
+    (live / "config.json").write_text("legacy")
+    (state / "fail-api").touch()
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 42
+    assert not (state.parent / "runtime" / "config.json").exists()
+    assert (live / "config.json").read_text() == "legacy"
+
+
+def test_failed_release_never_removes_existing_runtime_config(tmp_path):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+    runtime_config = state.parent / "runtime" / "config.json"
+    runtime_config.write_text("newer live config")
+    (state / "fail-api").touch()
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 42
+    assert runtime_config.read_text() == "newer live config"
 
 
 @pytest.mark.parametrize("name", ["install.sh", "deploy.sh"])
@@ -198,6 +252,34 @@ def test_staged_root_artifacts_are_not_writable_by_service(name):
         and "STAGE_DIR" in line
     ]
     assert not service_owned_stage_lines
+
+
+@pytest.mark.parametrize("name", ["install.sh", "deploy.sh"])
+def test_entrypoints_snapshot_runtime_config_without_root_following_it(name):
+    script = (ROOT / "deploy" / name).read_text()
+    runtime = script.index('CONFIG_DIR="/var/lib/tmail-policy"')
+    config_file = script.index('CONFIG_FILE="$CONFIG_DIR/config.json"', runtime)
+    legacy = script.index("$REMOTE_DIR/config.json", config_file)
+    supplied = script.index("Staging initial config", legacy)
+
+    assert runtime < config_file < legacy < supplied
+    assert "runuser -u tmail-policy -- cat --" in script
+    assert "chown -R tmail-policy:tmail-policy /var/lib/tmail-policy" not in script
+
+
+@pytest.mark.parametrize(
+    "name", ["tmail-policy.service", "tmail-api.service", "tmail-janitor.service"],
+)
+def test_service_units_use_dedicated_runtime_config(name):
+    unit = (ROOT / "deploy" / name).read_text()
+    assert "Environment=TMAIL_CONFIG=/var/lib/tmail-policy/config.json" in unit
+    assert "Environment=TMAIL_CONFIG=/opt/tmail-policy/config.json" not in unit
+
+
+@pytest.mark.parametrize("name", ["policy_daemon.py", "api_server.py", "email_janitor.py"])
+def test_python_entrypoints_default_to_dedicated_runtime_config(name):
+    source = (ROOT / "src" / name).read_text()
+    assert 'os.environ.get("TMAIL_CONFIG", "/var/lib/tmail-policy/config.json")' in source
 
 
 @pytest.mark.parametrize("name", ["install.sh", "deploy.sh"])

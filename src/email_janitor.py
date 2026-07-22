@@ -92,7 +92,7 @@ def run(config_path: str) -> None:
 if __name__ == "__main__":
     import os
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    config_path = os.environ.get("TMAIL_CONFIG", "/opt/tmail-policy/config.json")
+    config_path = os.environ.get("TMAIL_CONFIG", "/var/lib/tmail-policy/config.json")
     try:
         run(config_path)
     except Exception as exc:

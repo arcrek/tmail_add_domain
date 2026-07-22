@@ -84,6 +84,23 @@ def load_config(path: str) -> Config:
     return _config_from_dict(d)
 
 
+def _install_runtime_config(path: str) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(sys.stdin.read())
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 class ConfigStore:
     _EDITABLE = {"jmap_url", "jmap_token", "catchall_address", "mail_account_id", "retention_days"}
 
@@ -123,8 +140,18 @@ class ConfigStore:
 
 def _main(args: list[str] | None = None) -> int:
     args = sys.argv[1:] if args is None else args
+    if len(args) == 2 and args[0] == "install-runtime":
+        try:
+            _install_runtime_config(args[1])
+        except OSError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        return 0
     if len(args) != 2 or args[0] != "validate-web":
-        print("Usage: python3 -m src.config validate-web CONFIG", file=sys.stderr)
+        print(
+            "Usage: python3 -m src.config {validate-web|install-runtime} CONFIG",
+            file=sys.stderr,
+        )
         return 2
     try:
         validate_web_config(load_config(args[1]))

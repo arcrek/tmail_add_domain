@@ -33,7 +33,7 @@ The main web settings are:
 }
 ```
 
-Keep `config.json` mode `0600`. The install and deploy scripts preserve an existing `/opt/tmail-policy/config.json` instead of overwriting production credentials.
+Keep `config.json` mode `0600`. Production services use the mutable runtime copy at `/var/lib/tmail-policy/config.json`; the release tree under `/opt/tmail-policy` stays root-owned and read-only to the service. The install and deploy scripts preserve an existing runtime config untouched. If the runtime copy is absent, they migrate the legacy `/opt/tmail-policy/config.json` or use the supplied config for a fresh installation.
 
 ## Local development
 
@@ -83,7 +83,7 @@ For a later remote deployment:
 ./deploy/deploy.sh root@example-host
 ```
 
-Both scripts build and validate a secure staged release, preserve an existing production config at mode `0600`, promote only after dependency preparation succeeds, set service ownership, and restart `tmail-api` after `tmail-policy`.
+Both scripts build and validate a root-owned staged snapshot, preserve an existing `/var/lib/tmail-policy/config.json` without overwriting it, promote only after dependency preparation succeeds, and restart `tmail-api` after `tmail-policy`. The service owns only its runtime directory and config, allowing atomic administrator updates without write access to release code, helpers, or units.
 
 They do not configure TLS or modify an existing reverse proxy. Put nginx, Caddy, Apache, or another proxy in front of `127.0.0.1:8000`, serve the public site only over HTTPS, and forward the original host and client address. HTTPS is required because the administrator session cookie is `Secure`.
 

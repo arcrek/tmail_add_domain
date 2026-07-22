@@ -1,9 +1,15 @@
 from __future__ import annotations
 import json
+from pathlib import Path
 import stat
+import subprocess
+import sys
 import pytest
 from src import config as config_module
 from src.config import Config, ConfigStore, load_config
+
+
+ROOT = Path(__file__).parents[1]
 
 
 def _web_config(secret: str, password: str) -> Config:
@@ -111,6 +117,70 @@ def test_config_store_update_preserves_config_mode(tmp_path):
     path.chmod(0o600)
     ConfigStore(str(path)).update({"jmap_url": "https://new.example/jmap/"})
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_config_store_updates_in_service_owned_runtime_directory(tmp_path):
+    release = tmp_path / "release"
+    release.mkdir(mode=0o755)
+    (release / "src").mkdir()
+    release.chmod(0o555)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    path = runtime / "config.json"
+    path.write_text(json.dumps({
+        "jmap_url": "https://old.example/jmap/",
+        "jmap_token": "old",
+        "mx_hostname": "mail.example.com",
+        "catchall_address": "admin@example.com",
+        "listen_addr": "127.0.0.1",
+        "listen_port": 10030,
+        "cache_file": str(runtime / "domains.json"),
+    }))
+    path.chmod(0o600)
+
+    ConfigStore(str(path)).update({"jmap_url": "https://new.example/jmap/"})
+
+    assert load_config(str(path)).jmap_url == "https://new.example/jmap/"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert not (runtime / "config.json.tmp").exists()
+    assert stat.S_IMODE(release.stat().st_mode) == 0o555
+
+
+def test_install_runtime_config_creates_mode_0600_file(tmp_path):
+    target = tmp_path / "runtime" / "config.json"
+    target.parent.mkdir(mode=0o700)
+    payload = '{"jmap_url": "https://example.com/jmap/"}\n'
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "src" / "config.py"), "install-runtime", str(target)],
+        input=payload,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert target.read_text() == payload
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_install_runtime_config_does_not_follow_existing_symlink(tmp_path):
+    target = tmp_path / "runtime" / "config.json"
+    target.parent.mkdir(mode=0o700)
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    target.symlink_to(victim)
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "src" / "config.py"), "install-runtime", str(target)],
+        input="replacement",
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "File exists" in result.stderr
+    assert target.is_symlink()
+    assert victim.read_text() == "untouched"
 
 
 @pytest.mark.parametrize(("secret", "password", "field"), [

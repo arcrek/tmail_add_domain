@@ -5,6 +5,9 @@
 set -euo pipefail
 
 REMOTE_DIR="/opt/tmail-policy"
+CONFIG_DIR="/var/lib/tmail-policy"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+LEGACY_CONFIG="$REMOTE_DIR/config.json"
 POLICY_SERVICE_FILE="deploy/tmail-policy.service"
 API_SERVICE_FILE="deploy/tmail-api.service"
 STAGE_DIR=""
@@ -33,13 +36,23 @@ echo "==> Creating secure release stage"
 STAGE_DIR=$(mktemp -d /opt/.tmail-policy.stage.XXXXXX)
 mkdir -p "$STAGE_DIR/src" "$STAGE_DIR/frontend/dist" "$STAGE_DIR/deploy"
 
-if [ -f "$REMOTE_DIR/config.json" ]; then
-    echo "==> Staging existing production config"
-    install -m 600 "$REMOTE_DIR/config.json" "$STAGE_DIR/config.json"
+echo "==> Preparing service runtime directory"
+id tmail-policy &>/dev/null || useradd -r -s /sbin/nologin tmail-policy
+mkdir -p "$CONFIG_DIR"
+chown tmail-policy:tmail-policy "$CONFIG_DIR"
+chmod 700 "$CONFIG_DIR"
+
+if [ -L "$CONFIG_FILE" ] || [ -e "$CONFIG_FILE" ]; then
+    echo "==> Snapshotting existing runtime config"
+    runuser -u tmail-policy -- cat -- "$CONFIG_FILE" > "$STAGE_DIR/config.json"
+elif [ -L "$LEGACY_CONFIG" ] || [ -e "$LEGACY_CONFIG" ]; then
+    echo "==> Snapshotting legacy production config"
+    runuser -u tmail-policy -- cat -- "$LEGACY_CONFIG" > "$STAGE_DIR/config.json"
 else
     echo "==> Staging initial config"
     install -m 600 config.json "$STAGE_DIR/config.json"
 fi
+chmod 600 "$STAGE_DIR/config.json"
 
 echo "==> Copying staged release"
 cp requirements.txt "$STAGE_DIR/requirements.txt"
@@ -60,13 +73,6 @@ echo "==> Validating staged web config"
 
 echo "==> Preparing Python dependencies"
 pip3 install -r "$STAGE_DIR/requirements.txt"
-
-echo "==> Creating service user (idempotent)"
-id tmail-policy &>/dev/null || useradd -r -s /sbin/nologin tmail-policy
-
-echo "==> Preparing service data ownership"
-mkdir -p /var/lib/tmail-policy
-chown -R tmail-policy:tmail-policy /var/lib/tmail-policy
 
 # ── Postfix setup ──────────────────────────────────────────────────────────────
 

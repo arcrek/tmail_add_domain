@@ -86,7 +86,7 @@ class PolicyHandler(socketserver.StreamRequestHandler):
 
 def main() -> None:
     global _config, _config_store, _cache, _state, _jmap, _jmap_fingerprint
-    config_path = os.environ.get("TMAIL_CONFIG", "/opt/tmail-policy/config.json")
+    config_path = os.environ.get("TMAIL_CONFIG", "/var/lib/tmail-policy/config.json")
     _config_store = ConfigStore(config_path)
     _config = _config_store.get()
 

@@ -5,6 +5,8 @@ STAGE_DIR="${1:?staged release path required}"
 REMOTE_DIR="${2:?live release path required}"
 SYSTEMD_DIR="${TMAIL_SYSTEMD_DIR:-/etc/systemd/system}"
 SYSTEMCTL="${TMAIL_SYSTEMCTL:-systemctl}"
+CONFIG_DIR="${TMAIL_CONFIG_DIR:-/var/lib/tmail-policy}"
+CONFIG_FILE="$CONFIG_DIR/config.json"
 UNITS=(
     tmail-policy.service
     tmail-api.service
@@ -15,6 +17,7 @@ BACKUP_DIR=$(mktemp -d "$(dirname "$REMOTE_DIR")/.tmail-policy.backup.XXXXXX")
 OLD_RELEASE=0
 PROMOTED=0
 UNITS_BACKED_UP=0
+CONFIG_CREATED=0
 
 cleanup() {
     status=$?
@@ -33,6 +36,9 @@ cleanup() {
         fi
         if [ "$OLD_RELEASE" -eq 1 ] && [ -e "$BACKUP_DIR/release" ]; then
             mv "$BACKUP_DIR/release" "$REMOTE_DIR" || rollback_failed=1
+        fi
+        if [ "$CONFIG_CREATED" -eq 1 ]; then
+            runuser -u tmail-policy -- rm -f -- "$CONFIG_FILE" || rollback_failed=1
         fi
 
         for unit in "${UNITS[@]}"; do
@@ -92,8 +98,14 @@ if [ -e "$REMOTE_DIR" ]; then
 fi
 mv "$STAGE_DIR" "$REMOTE_DIR"
 PROMOTED=1
-chown -- tmail-policy:tmail-policy "$REMOTE_DIR/config.json"
-chmod 600 "$REMOTE_DIR/config.json"
+if [ -L "$CONFIG_FILE" ] || [ -e "$CONFIG_FILE" ]; then
+    :
+else
+    runuser -u tmail-policy -- /usr/bin/python3 "$REMOTE_DIR/src/config.py" \
+        install-runtime "$CONFIG_FILE" < "$REMOTE_DIR/config.json"
+    CONFIG_CREATED=1
+fi
+rm -f -- "$REMOTE_DIR/config.json"
 
 "$SYSTEMCTL" daemon-reload
 "$SYSTEMCTL" enable tmail-policy.service tmail-api.service tmail-janitor.timer

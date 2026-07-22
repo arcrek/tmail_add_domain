@@ -5,7 +5,7 @@ After=network.target tmail-policy.service
 [Service]
 User=tmail-policy
 WorkingDirectory=/opt/tmail-policy
-Environment=TMAIL_CONFIG=/opt/tmail-policy/config.json
+Environment=TMAIL_CONFIG=/var/lib/tmail-policy/config.json
 ExecStart=/usr/bin/python3 -m src.api_server
 Restart=always
 RestartSec=5

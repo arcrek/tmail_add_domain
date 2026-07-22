@@ -540,7 +540,7 @@ def _set_security_headers(request: Request, response: Response) -> None:
 
 
 def main() -> None:
-    config_path = os.environ.get("TMAIL_CONFIG", "/opt/tmail-policy/config.json")
+    config_path = os.environ.get("TMAIL_CONFIG", "/var/lib/tmail-policy/config.json")
     app = create_app(config_path)
     cfg = app.state.config_store.get()
     uvicorn.run(app, host=cfg.api_listen_addr, port=cfg.api_listen_port)
