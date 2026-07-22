@@ -18,6 +18,7 @@ OLD_RELEASE=0
 PROMOTED=0
 UNITS_BACKED_UP=0
 CONFIG_CREATED=0
+CONFIG_ID=""
 
 cleanup() {
     status=$?
@@ -31,14 +32,15 @@ cleanup() {
             "$SYSTEMCTL" disable "$unit" || rollback_failed=1
         done
 
+        if [ "$CONFIG_CREATED" -eq 1 ]; then
+            runuser -u tmail-policy -- /usr/bin/python3 "$REMOTE_DIR/src/config.py" \
+                remove-runtime "$CONFIG_FILE" "$CONFIG_ID" || rollback_failed=1
+        fi
         if [ "$PROMOTED" -eq 1 ] && [ -e "$REMOTE_DIR" ]; then
             mv "$REMOTE_DIR" "$BACKUP_DIR/failed" || rollback_failed=1
         fi
         if [ "$OLD_RELEASE" -eq 1 ] && [ -e "$BACKUP_DIR/release" ]; then
             mv "$BACKUP_DIR/release" "$REMOTE_DIR" || rollback_failed=1
-        fi
-        if [ "$CONFIG_CREATED" -eq 1 ]; then
-            runuser -u tmail-policy -- rm -f -- "$CONFIG_FILE" || rollback_failed=1
         fi
 
         for unit in "${UNITS[@]}"; do
@@ -88,7 +90,9 @@ done
 UNITS_BACKED_UP=1
 
 if [ -f "$STAGE_DIR/.legacy-config" ]; then
-    "$SYSTEMCTL" stop tmail-api.service
+    if [ -e "$BACKUP_DIR/state/tmail-api.service.active" ]; then
+        "$SYSTEMCTL" stop tmail-api.service
+    fi
     CUTOVER_CONFIG=$(mktemp "$STAGE_DIR/.config.cutover.XXXXXX")
     runuser -u tmail-policy -- cat -- "$REMOTE_DIR/config.json" > "$CUTOVER_CONFIG"
     chmod 600 "$CUTOVER_CONFIG"
@@ -111,8 +115,9 @@ PROMOTED=1
 if [ -L "$CONFIG_FILE" ] || [ -e "$CONFIG_FILE" ]; then
     :
 else
-    runuser -u tmail-policy -- /usr/bin/python3 "$REMOTE_DIR/src/config.py" \
-        install-runtime "$CONFIG_FILE" < "$REMOTE_DIR/config.json"
+    CONFIG_ID=$(runuser -u tmail-policy -- /usr/bin/python3 \
+        "$REMOTE_DIR/src/config.py" install-runtime "$CONFIG_FILE" \
+        < "$REMOTE_DIR/config.json")
     CONFIG_CREATED=1
 fi
 rm -f -- "$REMOTE_DIR/config.json"

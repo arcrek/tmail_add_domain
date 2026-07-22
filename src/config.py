@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
 import tempfile
 import threading
@@ -94,10 +95,11 @@ def _fsync_parent(path: str) -> None:
         os.close(fd)
 
 
-def _install_runtime_config(path: str) -> None:
+def _install_runtime_config(path: str) -> tuple[int, int]:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     created = False
+    identity: tuple[int, int] | None = None
     try:
         fd = os.open(path, flags, 0o600)
         created = True
@@ -108,6 +110,8 @@ def _install_runtime_config(path: str) -> None:
             handle.write(sys.stdin.read())
             handle.flush()
             os.fsync(handle.fileno())
+            installed = os.fstat(handle.fileno())
+            identity = (installed.st_dev, installed.st_ino)
         _fsync_parent(path)
     except BaseException:
         if fd != -1:
@@ -123,6 +127,33 @@ def _install_runtime_config(path: str) -> None:
                 except OSError:
                     pass
         raise
+    assert identity is not None
+    return identity
+
+
+def _remove_runtime_config(path: str, expected_identity: tuple[int, int]) -> None:
+    installed = os.lstat(path)
+    if not stat.S_ISREG(installed.st_mode):
+        raise ValueError(f"runtime config is not a regular file: {path}")
+    identity = (installed.st_dev, installed.st_ino)
+    if identity != expected_identity:
+        raise ValueError(
+            f"runtime config identity changed: expected "
+            f"{expected_identity[0]}:{expected_identity[1]}, found "
+            f"{identity[0]}:{identity[1]}"
+        )
+    os.unlink(path)
+    _fsync_parent(path)
+
+
+def _parse_runtime_identity(value: str) -> tuple[int, int]:
+    fields = value.split(":")
+    if len(fields) != 2:
+        raise ValueError("runtime config identity must be DEV:INO")
+    identity = (int(fields[0]), int(fields[1]))
+    if min(identity) < 0:
+        raise ValueError("runtime config identity must be DEV:INO")
+    return identity
 
 
 class ConfigStore:
@@ -189,14 +220,24 @@ def _main(args: list[str] | None = None) -> int:
     args = sys.argv[1:] if args is None else args
     if len(args) == 2 and args[0] == "install-runtime":
         try:
-            _install_runtime_config(args[1])
+            device, inode = _install_runtime_config(args[1])
         except OSError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(f"{device}:{inode}")
+        return 0
+    if len(args) == 3 and args[0] == "remove-runtime":
+        try:
+            identity = _parse_runtime_identity(args[2])
+            _remove_runtime_config(args[1], identity)
+        except (OSError, ValueError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
         return 0
     if len(args) != 2 or args[0] != "validate-web":
         print(
-            "Usage: python3 -m src.config {validate-web|install-runtime} CONFIG",
+            "Usage: python3 -m src.config validate-web CONFIG | "
+            "install-runtime CONFIG | remove-runtime CONFIG DEV:INO",
             file=sys.stderr,
         )
         return 2

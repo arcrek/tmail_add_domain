@@ -188,6 +188,8 @@ def test_install_runtime_config_creates_mode_0600_file(tmp_path):
     assert result.returncode == 0, result.stderr
     assert target.read_text() == payload
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    installed = target.stat()
+    assert result.stdout == f"{installed.st_dev}:{installed.st_ino}\n"
 
 
 def test_install_runtime_config_does_not_follow_existing_symlink(tmp_path):
@@ -245,6 +247,120 @@ def test_install_runtime_config_does_not_acknowledge_directory_fsync_failure(
 
     assert not target.exists()
     assert events == ["file", "directory", "directory"]
+
+
+def test_remove_runtime_config_removes_exact_inode_and_fsyncs_parent(tmp_path, monkeypatch):
+    target = tmp_path / "runtime" / "config.json"
+    target.parent.mkdir(mode=0o700)
+    target.write_text("created by deployment")
+    installed = target.stat()
+    events = _record_fsyncs(monkeypatch)
+
+    config_module._remove_runtime_config(
+        str(target),
+        (installed.st_dev, installed.st_ino),
+    )
+
+    assert not target.exists()
+    assert events == ["directory"]
+
+
+def test_remove_runtime_config_preserves_atomic_replacement(tmp_path):
+    target = tmp_path / "runtime" / "config.json"
+    target.parent.mkdir(mode=0o700)
+    target.write_text("created by deployment")
+    installed = target.stat()
+    replacement = target.with_suffix(".replacement")
+    replacement.write_text("concurrent replacement")
+    replacement.replace(target)
+
+    with pytest.raises(ValueError, match="identity changed"):
+        config_module._remove_runtime_config(
+            str(target),
+            (installed.st_dev, installed.st_ino),
+        )
+
+    assert target.read_text() == "concurrent replacement"
+
+
+def test_remove_runtime_config_does_not_follow_symlink(tmp_path):
+    target = tmp_path / "runtime" / "config.json"
+    target.parent.mkdir(mode=0o700)
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    installed = victim.stat()
+    target.symlink_to(victim)
+
+    with pytest.raises(ValueError, match="not a regular file"):
+        config_module._remove_runtime_config(
+            str(target),
+            (installed.st_dev, installed.st_ino),
+        )
+
+    assert target.is_symlink()
+    assert victim.read_text() == "untouched"
+
+
+def test_remove_runtime_config_rejects_directory(tmp_path):
+    target = tmp_path / "runtime" / "config.json"
+    target.mkdir(parents=True)
+    installed = target.stat()
+
+    with pytest.raises(ValueError, match="not a regular file"):
+        config_module._remove_runtime_config(
+            str(target),
+            (installed.st_dev, installed.st_ino),
+        )
+
+    assert target.is_dir()
+
+
+def test_remove_runtime_config_cli_removes_matching_inode(tmp_path):
+    target = tmp_path / "runtime" / "config.json"
+    target.parent.mkdir(mode=0o700)
+    target.write_text("created by deployment")
+    installed = target.stat()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "src" / "config.py"),
+            "remove-runtime",
+            str(target),
+            f"{installed.st_dev}:{installed.st_ino}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not target.exists()
+
+
+def test_remove_runtime_config_cli_reports_directory_fsync_failure(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    target = tmp_path / "runtime" / "config.json"
+    target.parent.mkdir(mode=0o700)
+    target.write_text("created by deployment")
+    installed = target.stat()
+
+    def fail_directory(_fd: int) -> None:
+        raise OSError("directory fsync failed")
+
+    monkeypatch.setattr(config_module.os, "fsync", fail_directory)
+
+    result = config_module._main([
+        "remove-runtime",
+        str(target),
+        f"{installed.st_dev}:{installed.st_ino}",
+    ])
+
+    assert result == 1
+    assert "directory fsync failed" in capsys.readouterr().err
+    assert not target.exists()
 
 
 def test_config_store_fsyncs_file_then_parent(tmp_path, monkeypatch):

@@ -37,10 +37,26 @@ case "$command" in
     enable) for unit in "$@"; do : > "$FAKE_SYSTEMD_STATE/enabled/$unit"; done ;;
     disable) for unit in "$@"; do rm -f "$FAKE_SYSTEMD_STATE/enabled/$unit"; done ;;
     start) for unit in "$@"; do : > "$FAKE_SYSTEMD_STATE/active/$unit"; done ;;
-    stop) for unit in "$@"; do rm -f "$FAKE_SYSTEMD_STATE/active/$unit"; done ;;
+    stop)
+        for unit in "$@"; do
+            if [ -e "$FAKE_SYSTEMD_STATE/fail-inactive-stop" ] \
+                && [ ! -e "$FAKE_SYSTEMD_STATE/active/$unit" ]; then
+                exit 46
+            fi
+            if [ -e "$FAKE_SYSTEMD_STATE/fail-active-stop" ] \
+                && [ -e "$FAKE_SYSTEMD_STATE/active/$unit" ]; then
+                exit 47
+            fi
+            rm -f "$FAKE_SYSTEMD_STATE/active/$unit"
+        done
+        ;;
     restart)
         if [ "$1" = tmail-api.service ] && [ -e "$FAKE_SYSTEMD_STATE/fail-api" ]; then
             [ -f "$FAKE_RUNTIME_CONFIG" ] || exit 44
+            if [ -e "$FAKE_SYSTEMD_STATE/replace-runtime-before-fail" ]; then
+                printf 'concurrent replacement' > "$FAKE_RUNTIME_CONFIG.replacement"
+                mv "$FAKE_RUNTIME_CONFIG.replacement" "$FAKE_RUNTIME_CONFIG"
+            fi
             exit 42
         fi
         : > "$FAKE_SYSTEMD_STATE/active/$1"
@@ -232,6 +248,44 @@ def test_legacy_cutover_uses_config_updated_after_initial_snapshot(tmp_path):
     )
 
 
+@pytest.mark.parametrize("old_api_unit", [False, True], ids=["absent", "inactive"])
+def test_legacy_cutover_skips_stop_when_api_was_not_active(tmp_path, old_api_unit):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+    (stage / ".legacy-config").touch()
+    live.mkdir()
+    (live / "version").write_text("old")
+    final_config = _config_payload("final")
+    (live / "config.json").write_text(final_config)
+    if old_api_unit:
+        (systemd / "tmail-api.service").write_text("old tmail-api.service")
+    (state / "fail-inactive-stop").touch()
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 0, result.stderr
+    assert (state.parent / "runtime" / "config.json").read_text() == final_config
+    assert "stop tmail-api.service" not in (state / "log").read_text()
+
+
+def test_legacy_cutover_aborts_when_stopping_previously_active_api_fails(tmp_path):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+    (stage / ".legacy-config").touch()
+    live.mkdir()
+    (live / "version").write_text("old")
+    (live / "config.json").write_text(_config_payload("final"))
+    (state / "active" / "tmail-api.service").touch()
+    (state / "fail-active-stop").touch()
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 47
+    assert (live / "version").read_text() == "old"
+    assert (state / "active" / "tmail-api.service").exists()
+    assert not (state.parent / "runtime" / "config.json").exists()
+
+
 def test_invalid_final_legacy_snapshot_restores_previously_active_api(tmp_path):
     stage, live, systemd = _release_tree(tmp_path)
     command, state = _fake_systemctl(tmp_path)
@@ -262,6 +316,24 @@ def test_failed_release_removes_only_config_created_by_deployment(tmp_path):
     assert result.returncode == 42
     assert not (state.parent / "runtime" / "config.json").exists()
     assert (live / "config.json").read_text() == "legacy"
+
+
+def test_failed_release_preserves_concurrent_runtime_config_replacement(tmp_path):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+    live.mkdir()
+    (live / "version").write_text("old")
+    (state / "fail-api").touch()
+    (state / "replace-runtime-before-fail").touch()
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 42
+    runtime_config = state.parent / "runtime" / "config.json"
+    assert runtime_config.read_text() == "concurrent replacement"
+    assert (live / "version").read_text() == "old"
+    assert "rollback incomplete" in result.stderr
+    assert list(tmp_path.glob(".tmail-policy.backup.*"))
 
 
 def test_failed_release_never_removes_existing_runtime_config(tmp_path):
