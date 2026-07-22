@@ -88,6 +88,16 @@ GET    /messages/{id}/attachments/{blob_id}
 GET    /sources/{id}
 ```
 
+### Interactive API Documentation
+
+FastAPI's built-in OpenAPI support exposes:
+
+- `GET /docs` — interactive Swagger UI;
+- `GET /openapi.json` — machine-readable OpenAPI schema;
+- `GET /redoc` — read-only ReDoc reference.
+
+The schema documents the Mail.tm-shaped resources, Hydra responses, passwordless `POST /token` input, bearer-token usage, pagination, validation errors, and the intentional differences from Mail.tm authentication. Example requests and responses are defined on the FastAPI models so the documentation stays generated from the implemented contract rather than a separate handwritten copy.
+
 Collections use Mail.tm's Hydra envelope:
 
 ```json
@@ -161,7 +171,7 @@ https://frontend.example/user@example.com
 
 The app normalizes and validates the address, requests a token, stores it locally, and opens the inbox without another action. Invalid local parts or disabled domains return to the address screen with a clear error.
 
-Static reserved routes such as `/admin`, `/api`, `/settings`, and asset paths take priority over the one-segment address route. The address is URL-decoded once and must contain exactly one `@`.
+Static reserved routes such as `/admin`, `/api`, `/docs`, `/redoc`, `/openapi.json`, `/settings`, and asset paths take priority over the one-segment address route. The address is URL-decoded once and must contain exactly one `@`.
 
 ## Administration
 
@@ -247,6 +257,7 @@ Temporary addresses and address tokens are browser-local/stateless. Messages and
 Backend tests cover:
 
 - Mail.tm/Hydra domain, account, token, message, and error shapes;
+- generated OpenAPI paths, auth declarations, and examples;
 - HMAC token creation, parsing, tamper rejection, and address normalization;
 - recipient isolation for message read, patch, delete, attachment, and source routes;
 - JMAP summary/detail mapping;
@@ -274,4 +285,3 @@ The final verification includes the existing Python test suite, the new API test
 - Host infrastructure monitoring
 - Arbitrary global JavaScript injection
 - Reusing or maintaining the Laravel demo
-
