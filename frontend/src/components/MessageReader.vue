@@ -39,19 +39,22 @@ function formatBytes(value: number): string {
 
 async function loadMessage(): Promise<void> {
   const version = ++requestVersion
+  const token = props.token
+  const id = props.id
   loading.value = true
   error.value = ''
   actionError.value = ''
+  busy.value = ''
   message.value = null
   bodyMode.value = 'html'
   try {
-    const value = await api.message(props.token, props.id)
+    const value = await api.message(token, id)
     if (version !== requestVersion) return
     message.value = value
     if (!value.seen) {
       try {
-        await api.setSeen(props.token, props.id, true)
-        if (version === requestVersion) emit('seen', props.id)
+        await api.setSeen(token, id, true)
+        if (version === requestVersion) emit('seen', id)
       } catch (cause) {
         if (version === requestVersion) {
           actionError.value = cause instanceof ApiError ? cause.message : 'The read status could not be saved.'
@@ -62,7 +65,7 @@ async function loadMessage(): Promise<void> {
     if (version !== requestVersion) return
     if (cause instanceof ApiError && cause.status === 404) {
       error.value = 'This message is no longer available.'
-      emit('stale', props.id)
+      emit('stale', id)
     } else {
       error.value = cause instanceof ApiError ? cause.message : 'The message could not be loaded.'
     }
@@ -72,7 +75,23 @@ async function loadMessage(): Promise<void> {
 }
 
 function safeFilename(value: string): string {
-  return value.split(/[\\/]/).pop() || 'attachment'
+  const basename = value
+    .normalize('NFKC')
+    .split(/[\\/]/)
+    .pop()
+    ?.replace(/[\u0000-\u001f\u007f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/[<>:"|?*]/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/^[ .]+|[ .]+$/g, '') || ''
+  if (!basename) return 'attachment'
+  if (basename.length <= 120) return basename
+
+  const dot = basename.lastIndexOf('.')
+  const extension = dot > 0 && /^\.[a-z0-9]{1,15}$/i.test(basename.slice(dot))
+    ? basename.slice(dot)
+    : ''
+  const stem = basename.slice(0, 120 - extension.length).replace(/[ .]+$/g, '') || 'attachment'
+  return `${stem}${extension}`
 }
 
 function saveBlob(blob: Blob, filename: string): void {
@@ -87,46 +106,69 @@ function saveBlob(blob: Blob, filename: string): void {
 }
 
 async function downloadAttachment(attachment: AttachmentResource): Promise<void> {
-  if (!message.value) return
-  busy.value = attachment.id
+  const current = message.value
+  if (!current) return
+  const version = requestVersion
+  const token = props.token
+  const messageId = current.id
+  const attachmentId = attachment.id
+  const filename = safeFilename(attachment.filename)
+  const action = `attachment:${attachmentId}`
+  busy.value = action
   actionError.value = ''
   try {
-    saveBlob(
-      await api.attachment(props.token, message.value.id, attachment.id),
-      safeFilename(attachment.filename),
-    )
+    const blob = await api.attachment(token, messageId, attachmentId)
+    if (version === requestVersion) saveBlob(blob, filename)
   } catch (cause) {
-    actionError.value = cause instanceof ApiError ? cause.message : 'The attachment could not be downloaded.'
+    if (version === requestVersion) {
+      actionError.value = cause instanceof ApiError ? cause.message : 'The attachment could not be downloaded.'
+    }
   } finally {
-    busy.value = ''
+    if (version === requestVersion && busy.value === action) busy.value = ''
   }
 }
 
 async function downloadSource(): Promise<void> {
-  if (!message.value) return
-  busy.value = 'source'
+  const current = message.value
+  if (!current) return
+  const version = requestVersion
+  const token = props.token
+  const messageId = current.id
+  const filename = safeFilename(`${messageId}.eml`)
+  const action = 'source'
+  busy.value = action
   actionError.value = ''
   try {
-    saveBlob(await api.source(props.token, message.value.id), `${message.value.id}.eml`)
+    const blob = await api.source(token, messageId)
+    if (version === requestVersion) saveBlob(blob, filename)
   } catch (cause) {
-    actionError.value = cause instanceof ApiError ? cause.message : 'The message source could not be downloaded.'
+    if (version === requestVersion) {
+      actionError.value = cause instanceof ApiError ? cause.message : 'The message source could not be downloaded.'
+    }
   } finally {
-    busy.value = ''
+    if (version === requestVersion && busy.value === action) busy.value = ''
   }
 }
 
 async function deleteCurrent(): Promise<void> {
-  if (!message.value || !window.confirm('Delete this message permanently?')) return
-  busy.value = 'delete'
+  const current = message.value
+  if (!current || !window.confirm('Delete this message permanently?')) return
+  const version = requestVersion
+  const token = props.token
+  const messageId = current.id
+  const action = 'delete'
+  busy.value = action
   actionError.value = ''
   try {
-    await api.deleteMessage(props.token, message.value.id)
-    emit('deleted', message.value.id)
+    await api.deleteMessage(token, messageId)
+    if (version === requestVersion) emit('deleted', messageId)
   } catch (cause) {
-    if (cause instanceof ApiError && cause.status === 404) emit('deleted', props.id)
-    else actionError.value = cause instanceof ApiError ? cause.message : 'The message could not be deleted.'
+    if (version === requestVersion) {
+      if (cause instanceof ApiError && cause.status === 404) emit('deleted', messageId)
+      else actionError.value = cause instanceof ApiError ? cause.message : 'The message could not be deleted.'
+    }
   } finally {
-    busy.value = ''
+    if (version === requestVersion && busy.value === action) busy.value = ''
   }
 }
 
@@ -199,9 +241,10 @@ onBeforeUnmount(() => { requestVersion += 1 })
               type="button"
               data-download-attachment
               :disabled="Boolean(busy)"
+              :aria-label="`Download ${safeFilename(attachment.filename)}`"
               @click="downloadAttachment(attachment)"
             >
-              {{ busy === attachment.id ? 'Saving' : 'Download' }}
+              {{ busy === `attachment:${attachment.id}` ? 'Saving' : 'Download' }}
             </button>
           </li>
         </ul>

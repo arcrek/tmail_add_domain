@@ -43,26 +43,24 @@ function formatDate(value: string): string {
 function notifyNew(values: MessageSummary[]): void {
   if (initialized && notificationPermission.value === 'granted' && typeof Notification !== 'undefined') {
     for (const item of values.filter(({ id }) => !knownIds.has(id))) {
-      new Notification(item.subject || 'New message', { body: item.from.address })
+      new Notification('New message', { body: 'A new message arrived in your temporary inbox.' })
     }
   }
-  knownIds = new Set(values.map(({ id }) => id))
+  for (const { id } of values) knownIds.add(id)
   initialized = true
 }
 
 async function refresh(): Promise<void> {
   if (refreshing.value || document.hidden) return
   const version = ++requestVersion
+  const requestedPage = page.value
   refreshing.value = true
   error.value = ''
   try {
-    const value = await api.messages(props.session.token, page.value)
+    const value = await api.messages(props.session.token, requestedPage)
     if (version !== requestVersion) return
     collection.value = value
-    notifyNew(value['hydra:member'])
-    if (selectedId.value && !value['hydra:member'].some(({ id }) => id === selectedId.value)) {
-      selectedId.value = null
-    }
+    if (requestedPage === 1) notifyNew(value['hydra:member'])
   } catch (cause) {
     if (version === requestVersion) error.value = failure(cause)
   } finally {
@@ -85,10 +83,16 @@ function startPolling(): void {
   }
 }
 
+function restartRefresh(): void {
+  requestVersion += 1
+  refreshing.value = false
+  void refresh()
+}
+
 function handleVisibility(): void {
   if (document.hidden) stopPolling()
   else {
-    void refresh()
+    restartRefresh()
     startPolling()
   }
 }
@@ -114,12 +118,10 @@ async function enableNotifications(): Promise<void> {
 }
 
 function changePage(next: number): void {
-  requestVersion += 1
-  refreshing.value = false
   page.value = next
   selectedId.value = null
   loading.value = true
-  void refresh()
+  restartRefresh()
 }
 
 function markSeen(id: string): void {

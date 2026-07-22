@@ -37,18 +37,22 @@ const summary = (id: string) => ({
   updatedAt: '2026-07-22T00:00:00Z',
 })
 
-const collection = (ids: string[], hasNext = false) => ({
+const collection = (
+  ids: string[],
+  { page = 1, next = false, previous = false }: { page?: number; next?: boolean; previous?: boolean } = {},
+) => ({
   '@context': '/contexts/Message',
-  '@id': '/messages?page=1',
+  '@id': `/messages?page=${page}`,
   '@type': 'hydra:Collection',
   'hydra:totalItems': ids.length,
   'hydra:member': ids.map(summary),
   'hydra:view': {
-    '@id': '/messages?page=1',
+    '@id': `/messages?page=${page}`,
     '@type': 'hydra:PartialCollectionView',
     'hydra:first': '/messages?page=1',
     'hydra:last': '/messages?page=1',
-    ...(hasNext ? { 'hydra:next': '/messages?page=2' } : {}),
+    ...(next ? { 'hydra:next': `/messages?page=${page + 1}` } : {}),
+    ...(previous ? { 'hydra:previous': `/messages?page=${page - 1}` } : {}),
   },
 })
 
@@ -94,7 +98,32 @@ describe('InboxView polling', () => {
     expect(mocks.messages).toHaveBeenCalledTimes(2)
   })
 
-  it('keeps a selected message selected when it survives a refresh', async () => {
+  it('starts a fresh visibility refresh when an older request is pending', async () => {
+    let finishPending: ((value: ReturnType<typeof collection>) => void) | undefined
+    mocks.messages
+      .mockResolvedValueOnce(collection(['one']))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishPending = resolve }))
+      .mockResolvedValueOnce(collection(['fresh']))
+    const wrapper = mount(InboxView, {
+      props: { session: { address: 'box@example.com', token: 'signed' }, fetchSeconds: 30 },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-action="refresh"]').trigger('click')
+    hidden = true
+    document.dispatchEvent(new Event('visibilitychange'))
+    hidden = false
+    document.dispatchEvent(new Event('visibilitychange'))
+    await flushPromises()
+
+    expect(mocks.messages).toHaveBeenCalledTimes(3)
+    finishPending?.(collection(['stale']))
+    await flushPromises()
+    expect(wrapper.text()).toContain('Message fresh')
+    expect(wrapper.text()).not.toContain('Message stale')
+  })
+
+  it('keeps a selected message when an ordinary refresh moves it off the current page', async () => {
     const wrapper = mount(InboxView, {
       props: { session: { address: 'box@example.com', token: 'signed' }, fetchSeconds: 30 },
     })
@@ -103,9 +132,11 @@ describe('InboxView polling', () => {
     await flushPromises()
     expect(wrapper.get('.message-row').attributes('aria-current')).toBe('true')
 
+    mocks.messages.mockResolvedValueOnce(collection([]))
     await wrapper.get('[data-action="refresh"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('.message-row').attributes('aria-current')).toBe('true')
+    expect(wrapper.find('.message-row').exists()).toBe(false)
+    expect(wrapper.find('.message-reader').exists()).toBe(true)
   })
 
   it('requests notification permission only from its explicit action', async () => {
@@ -128,19 +159,66 @@ describe('InboxView polling', () => {
   it('loads a requested page even when the current refresh is still pending', async () => {
     let finishRefresh: ((value: ReturnType<typeof collection>) => void) | undefined
     mocks.messages
-      .mockResolvedValueOnce(collection(['one'], true))
+      .mockResolvedValueOnce(collection(['one'], { next: true }))
       .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve }))
-      .mockResolvedValueOnce(collection(['two']))
+      .mockResolvedValueOnce(collection(['two'], { page: 2, previous: true }))
     const wrapper = mount(InboxView, {
       props: { session: { address: 'box@example.com', token: 'signed' }, fetchSeconds: 30 },
     })
     await flushPromises()
 
+    await wrapper.get('.message-row').trigger('click')
+    await flushPromises()
     await wrapper.get('[data-action="refresh"]').trigger('click')
     await wrapper.get('.pagination button:last-child').trigger('click')
     await flushPromises()
 
     expect(mocks.messages).toHaveBeenLastCalledWith('signed', 2)
-    finishRefresh?.(collection(['one'], true))
+    expect(wrapper.find('.message-reader').exists()).toBe(false)
+    expect(wrapper.find('.reader-placeholder').exists()).toBe(true)
+    finishRefresh?.(collection(['one'], { next: true }))
+  })
+
+  it('notifies only for new page-one IDs without exposing message metadata', async () => {
+    const notifications: Array<[string, NotificationOptions | undefined]> = []
+    const requestPermission = vi.fn().mockResolvedValue('granted')
+    vi.stubGlobal('Notification', class {
+      static permission = 'default'
+      static requestPermission = requestPermission
+      constructor(title: string, options?: NotificationOptions) {
+        notifications.push([title, options])
+      }
+    })
+    mocks.messages
+      .mockResolvedValueOnce(collection(['one'], { next: true }))
+      .mockResolvedValueOnce(collection(['page-two'], { page: 2, previous: true }))
+      .mockResolvedValueOnce(collection(['two', 'one'], { next: true }))
+      .mockResolvedValueOnce(collection(['two'], { next: true }))
+      .mockResolvedValueOnce(collection(['one'], { next: true }))
+    const wrapper = mount(InboxView, {
+      props: { session: { address: 'box@example.com', token: 'signed' }, fetchSeconds: 30 },
+    })
+    await flushPromises()
+    await wrapper.get('[data-action="notifications"]').trigger('click')
+    await wrapper.get('.pagination button:last-child').trigger('click')
+    await flushPromises()
+    expect(notifications).toEqual([])
+
+    await wrapper.get('.pagination button:first-child').trigger('click')
+    await flushPromises()
+    expect(notifications).toEqual([[
+      'New message',
+      { body: 'A new message arrived in your temporary inbox.' },
+    ]])
+
+    await wrapper.get('[data-action="refresh"]').trigger('click')
+    await flushPromises()
+    expect(notifications).toHaveLength(1)
+
+    await wrapper.get('[data-action="refresh"]').trigger('click')
+    await flushPromises()
+    expect(notifications).toHaveLength(1)
+    expect(JSON.stringify(notifications)).not.toContain('Message two')
+    expect(JSON.stringify(notifications)).not.toContain('sender@example.com')
   })
 })
