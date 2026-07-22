@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import threading
 from dataclasses import asdict, dataclass
 
@@ -78,8 +79,10 @@ class ConfigStore:
             current = asdict(load_config(self.path))
             current.update(values)
             updated = _config_from_dict(current)
+            mode = stat.S_IMODE(os.stat(self.path).st_mode)
             tmp = self.path + ".tmp"
             with open(tmp, "w") as handle:
+                os.chmod(tmp, mode)
                 json.dump(current, handle, indent=2)
                 handle.write("\n")
             os.replace(tmp, self.path)
