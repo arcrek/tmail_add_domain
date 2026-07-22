@@ -33,7 +33,7 @@ The main web settings are:
 }
 ```
 
-Keep `config.json` mode `0600`. Production services use the mutable runtime copy at `/var/lib/tmail-policy/config.json`; the release tree under `/opt/tmail-policy` stays root-owned and read-only to the service. The install and deploy scripts preserve an existing runtime config untouched. If the runtime copy is absent, they migrate the legacy `/opt/tmail-policy/config.json` or use the supplied config for a fresh installation.
+Keep `config.json` mode `0600`. Production services use the mutable runtime copy at `/var/lib/tmail-policy/config.json`; the release tree under `/opt/tmail-policy` stays root-owned and read-only to the service. The install and deploy scripts preserve an existing runtime config untouched. If the runtime copy is absent, they migrate the legacy `/opt/tmail-policy/config.json` or use the supplied config for a fresh installation. Legacy migration captures rollback state, stops the old API writer, takes and validates a final snapshot, then promotes the release.
 
 ## Local development
 

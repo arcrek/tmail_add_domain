@@ -48,6 +48,7 @@ if [ -L "$CONFIG_FILE" ] || [ -e "$CONFIG_FILE" ]; then
 elif [ -L "$LEGACY_CONFIG" ] || [ -e "$LEGACY_CONFIG" ]; then
     echo "==> Snapshotting legacy production config"
     runuser -u tmail-policy -- cat -- "$LEGACY_CONFIG" > "$STAGE_DIR/config.json"
+    touch "$STAGE_DIR/.legacy-config"
 else
     echo "==> Staging initial config"
     install -m 600 config.json "$STAGE_DIR/config.json"

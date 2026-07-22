@@ -1,4 +1,5 @@
 from __future__ import annotations
+import io
 import json
 from pathlib import Path
 import stat
@@ -10,6 +11,32 @@ from src.config import Config, ConfigStore, load_config
 
 
 ROOT = Path(__file__).parents[1]
+
+
+def _config_data(tmp_path: Path) -> dict[str, object]:
+    return {
+        "jmap_url": "https://old.example/jmap/",
+        "jmap_token": "old",
+        "mx_hostname": "mail.example.com",
+        "catchall_address": "admin@example.com",
+        "listen_addr": "127.0.0.1",
+        "listen_port": 10030,
+        "cache_file": str(tmp_path / "domains.json"),
+        "api_token_secret": "a" * 32,
+        "admin_password": "secret",
+    }
+
+
+def _record_fsyncs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    events: list[str] = []
+    real_fsync = config_module.os.fsync
+
+    def record(fd: int) -> None:
+        events.append("directory" if stat.S_ISDIR(config_module.os.fstat(fd).st_mode) else "file")
+        real_fsync(fd)
+
+    monkeypatch.setattr(config_module.os, "fsync", record)
+    return events
 
 
 def _web_config(secret: str, password: str) -> Config:
@@ -181,6 +208,105 @@ def test_install_runtime_config_does_not_follow_existing_symlink(tmp_path):
     assert "File exists" in result.stderr
     assert target.is_symlink()
     assert victim.read_text() == "untouched"
+
+
+def test_install_runtime_config_fsyncs_file_then_parent(tmp_path, monkeypatch):
+    target = tmp_path / "runtime" / "config.json"
+    target.parent.mkdir(mode=0o700)
+    monkeypatch.setattr(config_module.sys, "stdin", io.StringIO("config"))
+    events = _record_fsyncs(monkeypatch)
+
+    config_module._install_runtime_config(str(target))
+
+    assert events == ["file", "directory"]
+
+
+def test_install_runtime_config_does_not_acknowledge_directory_fsync_failure(
+    tmp_path,
+    monkeypatch,
+):
+    target = tmp_path / "runtime" / "config.json"
+    target.parent.mkdir(mode=0o700)
+    monkeypatch.setattr(config_module.sys, "stdin", io.StringIO("config"))
+    events: list[str] = []
+    real_fsync = config_module.os.fsync
+
+    def fail_directory(fd: int) -> None:
+        if stat.S_ISDIR(config_module.os.fstat(fd).st_mode):
+            events.append("directory")
+            raise OSError("directory fsync failed")
+        events.append("file")
+        real_fsync(fd)
+
+    monkeypatch.setattr(config_module.os, "fsync", fail_directory)
+
+    with pytest.raises(OSError, match="directory fsync failed"):
+        config_module._install_runtime_config(str(target))
+
+    assert not target.exists()
+    assert events == ["file", "directory", "directory"]
+
+
+def test_config_store_fsyncs_file_then_parent(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(_config_data(tmp_path)))
+    store = ConfigStore(str(path))
+    events = _record_fsyncs(monkeypatch)
+
+    store.update({"jmap_url": "https://new.example/jmap/"})
+
+    assert events == ["file", "directory"]
+
+
+def test_config_store_does_not_acknowledge_directory_fsync_failure(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(_config_data(tmp_path)))
+    store = ConfigStore(str(path))
+    real_fsync = config_module.os.fsync
+
+    def fail_directory(fd: int) -> None:
+        if stat.S_ISDIR(config_module.os.fstat(fd).st_mode):
+            raise OSError("directory fsync failed")
+        real_fsync(fd)
+
+    monkeypatch.setattr(config_module.os, "fsync", fail_directory)
+
+    with pytest.raises(OSError, match="directory fsync failed"):
+        store.update({"jmap_url": "https://new.example/jmap/"})
+
+    assert store._config.jmap_url == "https://old.example/jmap/"
+    assert not list(tmp_path.glob(".config.json.*.tmp"))
+
+
+def test_config_store_cleans_unique_temp_when_replace_fails(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(_config_data(tmp_path)))
+    store = ConfigStore(str(path))
+
+    def fail_replace(source: str, destination: str) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(config_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        store.update({"jmap_url": "https://new.example/jmap/"})
+
+    assert {item.name for item in tmp_path.iterdir()} == {"config.json"}
+
+
+def test_config_store_ignores_predictable_temp_symlink(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(_config_data(tmp_path)))
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    predictable = tmp_path / "config.json.tmp"
+    predictable.symlink_to(victim)
+
+    ConfigStore(str(path)).update({"jmap_url": "https://new.example/jmap/"})
+
+    assert victim.read_text() == "untouched"
+    assert predictable.is_symlink()
+    assert load_config(str(path)).jmap_url == "https://new.example/jmap/"
 
 
 @pytest.mark.parametrize(("secret", "password", "field"), [

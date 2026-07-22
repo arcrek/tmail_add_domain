@@ -45,7 +45,7 @@ if ssh "$SERVER" "test -L '$CONFIG_FILE' || test -e '$CONFIG_FILE'"; then
     ssh "$SERVER" "runuser -u tmail-policy -- cat -- '$CONFIG_FILE' > '$STAGE_DIR/config.json' && chmod 600 '$STAGE_DIR/config.json'"
 elif ssh "$SERVER" "test -L '$LEGACY_CONFIG' || test -e '$LEGACY_CONFIG'"; then
     echo "==> Snapshotting legacy production config"
-    ssh "$SERVER" "runuser -u tmail-policy -- cat -- '$LEGACY_CONFIG' > '$STAGE_DIR/config.json' && chmod 600 '$STAGE_DIR/config.json'"
+    ssh "$SERVER" "runuser -u tmail-policy -- cat -- '$LEGACY_CONFIG' > '$STAGE_DIR/config.json' && chmod 600 '$STAGE_DIR/config.json' && touch '$STAGE_DIR/.legacy-config'"
 else
     echo "==> Staging initial config"
     scp config.json "$SERVER:$STAGE_DIR/config.json.upload"

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import sys
+import tempfile
 import threading
 from dataclasses import asdict, dataclass
 
@@ -84,20 +84,44 @@ def load_config(path: str) -> Config:
     return _config_from_dict(d)
 
 
+def _fsync_parent(path: str) -> None:
+    parent = os.path.dirname(os.path.abspath(path))
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _install_runtime_config(path: str) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags, 0o600)
+    fd = -1
+    created = False
     try:
-        with os.fdopen(fd, "w") as handle:
+        fd = os.open(path, flags, 0o600)
+        created = True
+        handle = os.fdopen(fd, "w")
+        fd = -1
+        with handle:
             os.fchmod(handle.fileno(), 0o600)
             handle.write(sys.stdin.read())
             handle.flush()
             os.fsync(handle.fileno())
+        _fsync_parent(path)
     except BaseException:
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
+        if fd != -1:
+            os.close(fd)
+        if created:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            else:
+                try:
+                    _fsync_parent(path)
+                except OSError:
+                    pass
         raise
 
 
@@ -126,13 +150,36 @@ class ConfigStore:
             current = asdict(load_config(self.path))
             current.update(values)
             updated = _config_from_dict(current)
-            mode = stat.S_IMODE(os.stat(self.path).st_mode)
-            tmp = self.path + ".tmp"
-            with open(tmp, "w") as handle:
-                os.chmod(tmp, mode)
-                json.dump(current, handle, indent=2)
-                handle.write("\n")
-            os.replace(tmp, self.path)
+            parent = os.path.dirname(os.path.abspath(self.path))
+            prefix = f".{os.path.basename(self.path)}."
+            fd, tmp = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=parent)
+            published = False
+            try:
+                handle = os.fdopen(fd, "w")
+                fd = -1
+                with handle:
+                    os.fchmod(handle.fileno(), 0o600)
+                    json.dump(current, handle, indent=2)
+                    handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp, self.path)
+                published = True
+                _fsync_parent(self.path)
+            except BaseException:
+                if fd != -1:
+                    os.close(fd)
+                if not published:
+                    try:
+                        os.unlink(tmp)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        try:
+                            _fsync_parent(tmp)
+                        except OSError:
+                            pass
+                raise
             self._config = updated
             self._mtime = os.path.getmtime(self.path)
             return updated

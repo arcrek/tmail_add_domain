@@ -87,6 +87,16 @@ for unit in "${UNITS[@]}"; do
 done
 UNITS_BACKED_UP=1
 
+if [ -f "$STAGE_DIR/.legacy-config" ]; then
+    "$SYSTEMCTL" stop tmail-api.service
+    CUTOVER_CONFIG=$(mktemp "$STAGE_DIR/.config.cutover.XXXXXX")
+    runuser -u tmail-policy -- cat -- "$REMOTE_DIR/config.json" > "$CUTOVER_CONFIG"
+    chmod 600 "$CUTOVER_CONFIG"
+    (cd "$STAGE_DIR" && PYTHONPATH="$STAGE_DIR" /usr/bin/python3 -m src.config validate-web "$CUTOVER_CONFIG")
+    mv "$CUTOVER_CONFIG" "$STAGE_DIR/config.json"
+    rm -f -- "$STAGE_DIR/.legacy-config"
+fi
+
 for unit in "${UNITS[@]}"; do
     rm -f -- "$SYSTEMD_DIR/$unit"
     install -m 644 "$STAGE_DIR/deploy/$unit" "$SYSTEMD_DIR/$unit"

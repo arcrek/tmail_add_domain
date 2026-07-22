@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -53,6 +54,7 @@ esac
     runuser = tmp_path / "runuser"
     runuser.write_text("""#!/usr/bin/env bash
 set -eu
+printf 'runuser %s\n' "$*" >> "$FAKE_SYSTEMD_STATE/log"
 [ "$1" = -u ]
 shift 2
 [ "$1" = -- ]
@@ -63,6 +65,20 @@ exec "$@"
     return command, state
 
 
+def _config_payload(jmap_token: str) -> str:
+    return json.dumps({
+        "jmap_url": "https://example.com/jmap/",
+        "jmap_token": jmap_token,
+        "mx_hostname": "mail.example.com",
+        "catchall_address": "admin@example.com",
+        "listen_addr": "127.0.0.1",
+        "listen_port": 10030,
+        "cache_file": "/var/lib/tmail-policy/domains.json",
+        "api_token_secret": "a" * 32,
+        "admin_password": "secret",
+    })
+
+
 def _release_tree(tmp_path: Path):
     stage = tmp_path / "stage"
     live = tmp_path / "live"
@@ -71,7 +87,7 @@ def _release_tree(tmp_path: Path):
     (stage / "src").mkdir()
     systemd.mkdir()
     (stage / "version").write_text("new")
-    (stage / "config.json").write_text("secret")
+    (stage / "config.json").write_text(_config_payload("staged"))
     shutil.copy(ROOT / "src" / "config.py", stage / "src" / "config.py")
     for unit in UNITS:
         (stage / "deploy" / unit).write_text(f"new {unit}")
@@ -193,6 +209,46 @@ def test_release_preserves_existing_runtime_config(tmp_path):
     assert not (live / "config.json").exists()
 
 
+def test_legacy_cutover_uses_config_updated_after_initial_snapshot(tmp_path):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+    (stage / ".legacy-config").touch()
+    live.mkdir()
+    (live / "version").write_text("old")
+    final_config = _config_payload("final")
+    (live / "config.json").write_text(final_config)
+    (state / "active" / "tmail-api.service").touch()
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 0, result.stderr
+    runtime_config = state.parent / "runtime" / "config.json"
+    assert runtime_config.read_text() == final_config
+    log = (state / "log").read_text()
+    state_capture = log.index("is-active tmail-api.service")
+    stop = log.index("stop tmail-api.service")
+    assert state_capture < stop < log.index(
+        "runuser -u tmail-policy -- cat --",
+    )
+
+
+def test_invalid_final_legacy_snapshot_restores_previously_active_api(tmp_path):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+    (stage / ".legacy-config").touch()
+    live.mkdir()
+    (live / "version").write_text("old")
+    (live / "config.json").write_text("{}")
+    (state / "active" / "tmail-api.service").touch()
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 1
+    assert (state / "active" / "tmail-api.service").exists()
+    assert (live / "version").read_text() == "old"
+    assert not (state.parent / "runtime" / "config.json").exists()
+
+
 def test_failed_release_removes_only_config_created_by_deployment(tmp_path):
     stage, live, systemd = _release_tree(tmp_path)
     command, state = _fake_systemctl(tmp_path)
@@ -265,6 +321,23 @@ def test_entrypoints_snapshot_runtime_config_without_root_following_it(name):
     assert runtime < config_file < legacy < supplied
     assert "runuser -u tmail-policy -- cat --" in script
     assert "chown -R tmail-policy:tmail-policy /var/lib/tmail-policy" not in script
+
+
+@pytest.mark.parametrize("name", ["install.sh", "deploy.sh"])
+def test_entrypoints_mark_only_legacy_snapshots_for_cutover_refresh(name):
+    script = (ROOT / "deploy" / name).read_text()
+    legacy_branch = script.index("Snapshotting legacy production config")
+    supplied_branch = script.index("Staging initial config", legacy_branch)
+
+    assert ".legacy-config" in script[legacy_branch:supplied_branch]
+
+
+def test_legacy_cutover_validation_runs_from_trusted_stage():
+    script = RELEASE.read_text()
+    assert (
+        '(cd "$STAGE_DIR" && PYTHONPATH="$STAGE_DIR" /usr/bin/python3 -m src.config '
+        'validate-web "$CUTOVER_CONFIG")'
+    ) in script
 
 
 @pytest.mark.parametrize(
