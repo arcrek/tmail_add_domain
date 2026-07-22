@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AddressPanel from './components/AddressPanel.vue'
 import InboxView from './components/InboxView.vue'
 import SandboxFrame from './components/SandboxFrame.vue'
+import AdminApp from './admin/AdminApp.vue'
 import { ApiError, api } from './api'
 import { parseRoute } from './route'
 import { loadSessions, saveSession } from './session'
@@ -135,11 +136,7 @@ onBeforeUnmount(() => {
         mode="content"
         :title="`Configured ${name} content`"
       />
-      <section v-if="view === 'admin'" class="admin-placeholder" aria-labelledby="admin-title">
-        <p class="eyebrow">Administration</p>
-        <h1 id="admin-title">Admin access</h1>
-        <p>The settings interface is being prepared.</p>
-      </section>
+      <AdminApp v-if="view === 'admin'" />
 
       <InboxView
         v-else-if="view === 'inbox' && current"

@@ -166,6 +166,7 @@ export interface DashboardResource {
   domains: {
     active: number
     domainsToday: number
+    domainsSevenDays: number
     recentDomains: Array<{ domain: string; created_at: string }>
   }
   autoSyncDomains: boolean

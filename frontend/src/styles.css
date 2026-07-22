@@ -34,7 +34,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -216,13 +217,19 @@ main {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 46px;
   border: 1px solid #69665e;
   background: #fffdf7;
   color: var(--ink);
   padding: 0.7rem 0.8rem;
+  border-radius: var(--radius);
+}
+
+textarea {
+  resize: vertical;
 }
 
 .at-sign {
@@ -326,6 +333,295 @@ select {
 .inbox-empty p {
   color: var(--muted);
   line-height: 1.5;
+}
+
+.admin-login {
+  display: grid;
+  min-height: calc(100dvh - 137px);
+  place-items: center;
+  padding: 2rem;
+}
+
+.admin-login-panel {
+  width: min(100%, 31rem);
+  padding: clamp(1.5rem, 5vw, 3rem);
+}
+
+.admin-login-panel h1 {
+  margin-bottom: 1rem;
+  font-size: clamp(2.6rem, 7vw, 4.8rem);
+}
+
+.admin-note,
+.empty-copy {
+  max-width: 62ch;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.admin-shell {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  min-height: calc(100dvh - 137px);
+}
+
+.admin-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  padding: 2rem 1.25rem;
+  border-right: 1px solid var(--line);
+  background: #eeeadf;
+}
+
+.admin-sidebar .eyebrow {
+  margin-bottom: 0.55rem;
+}
+
+.admin-sidebar nav {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.admin-sidebar [role="tab"] {
+  min-height: 42px;
+  border: 1px solid transparent;
+  padding: 0.65rem 0.75rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.83rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.admin-sidebar [role="tab"]:hover {
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.admin-sidebar [role="tab"][aria-selected="true"] {
+  border-color: var(--indigo-dark);
+  background: var(--indigo);
+  color: #fffdf7;
+}
+
+.admin-sidebar > .text-button {
+  width: max-content;
+  margin-top: auto;
+}
+
+.admin-content {
+  min-width: 0;
+  min-height: 0;
+}
+
+.admin-section {
+  width: min(100%, 75rem);
+  padding: clamp(2rem, 5vw, 4.5rem);
+}
+
+.admin-section > h1,
+.admin-section-heading h1 {
+  max-width: none;
+  margin-bottom: 2.5rem;
+  font-size: clamp(2.3rem, 5vw, 4.4rem);
+  line-height: 0.98;
+}
+
+.admin-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 3rem;
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+
+.metric-grid > div {
+  min-height: 8.5rem;
+  padding: 1.1rem;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.metric-grid dt,
+.sync-summary dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.metric-grid dd {
+  margin: 1.5rem 0 0;
+  font: 650 clamp(2rem, 5vw, 3.8rem)/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.metric-skeleton {
+  min-height: 8.5rem;
+  border-top: 0;
+  border-left: 0;
+}
+
+.admin-data-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(15rem, 1fr);
+  gap: clamp(2rem, 5vw, 4rem);
+  margin-bottom: 3rem;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+th,
+td {
+  padding: 0.8rem 0.65rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+th {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.sync-summary dl {
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+
+.sync-summary dl > div {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.sync-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+}
+
+.status-error,
+.danger-text {
+  color: var(--red) !important;
+}
+
+.settings-form {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+}
+
+.settings-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.field small,
+.preview-field > span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.check-field {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: fit-content;
+  color: #55534d;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.check-field input {
+  width: 1.1rem;
+  min-height: 1.1rem;
+  margin: 0;
+  accent-color: var(--indigo);
+}
+
+.form-actions,
+.subsection-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.form-status {
+  min-height: 1.25rem;
+  margin: 0;
+  color: var(--green);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.settings-form .form-error {
+  min-height: 0;
+  padding: 0;
+}
+
+.domain-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+.domain-list li {
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--line);
+  font: 0.78rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.content-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+  padding: 1.5rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.preview-field {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.content-editor-grid .sandbox-frame {
+  min-height: 15rem;
+  background: #fffdf7;
+}
+
+.ad-settings {
+  margin-top: 1rem;
+}
+
+.subsection-heading h2 {
+  margin: 0;
 }
 
 .empty-state button {
@@ -909,6 +1205,67 @@ button:active:not(:disabled) {
 
   .sandbox-frame {
     min-height: 22rem;
+  }
+
+  .admin-login {
+    padding: 1rem;
+  }
+
+  .admin-shell {
+    display: block;
+  }
+
+  .admin-sidebar {
+    gap: 1rem;
+    padding: 1rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .admin-sidebar nav {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+
+  .admin-sidebar [role="tab"] {
+    flex: 0 0 auto;
+  }
+
+  .admin-sidebar > .text-button {
+    margin-top: 0;
+  }
+
+  .admin-section {
+    padding: 2.5rem 1rem 4rem;
+  }
+
+  .admin-section-heading {
+    display: block;
+  }
+
+  .admin-section-heading > button {
+    margin-bottom: 2rem;
+  }
+
+  .metric-grid,
+  .settings-grid,
+  .settings-grid-three,
+  .admin-data-grid,
+  .content-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-grid > div {
+    min-height: 7rem;
+  }
+
+  .metric-grid dd {
+    margin-top: 1rem;
+  }
+
+  .domain-list {
+    grid-template-columns: 1fr;
   }
 }
 
