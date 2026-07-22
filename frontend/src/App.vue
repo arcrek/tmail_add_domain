@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AddressPanel from './components/AddressPanel.vue'
 import InboxView from './components/InboxView.vue'
 import SandboxFrame from './components/SandboxFrame.vue'
@@ -19,9 +19,57 @@ const loading = ref(initialRoute.name === 'address')
 const error = ref('')
 let navigationVersion = 0
 let siteVersion = 0
+const root = document.documentElement
+const originalLanguage = root.getAttribute('lang')
+const originalPrimary = root.style.getPropertyValue('--primary')
+const originalAccent = root.style.getPropertyValue('--accent')
+const originalFavicon = document.head.querySelector<HTMLLinkElement>('link[rel~="icon"]')
+const originalFaviconHref = originalFavicon?.getAttribute('href') ?? null
+let favicon = originalFavicon
+let createdFavicon = false
 
 const adSlots = computed(() => Object.entries(site.value?.adSlots ?? {})
   .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1])))
+
+function applySite(value: SiteResource | null): void {
+  if (!value) return
+  root.style.setProperty('--primary', value.primaryColor)
+  root.style.setProperty('--accent', value.accentColor)
+  root.lang = value.language
+  if (value.faviconDataUrl) {
+    if (!favicon) {
+      favicon = document.createElement('link')
+      favicon.rel = 'icon'
+      favicon.dataset.tmailFavicon = ''
+      document.head.append(favicon)
+      createdFavicon = true
+    }
+    favicon.setAttribute('href', value.faviconDataUrl)
+  } else if (createdFavicon) {
+    favicon?.remove()
+    favicon = null
+    createdFavicon = false
+  } else if (favicon) {
+    if (originalFaviconHref === null) favicon.removeAttribute('href')
+    else favicon.setAttribute('href', originalFaviconHref)
+  }
+}
+
+function cleanupSite(): void {
+  if (originalPrimary) root.style.setProperty('--primary', originalPrimary)
+  else root.style.removeProperty('--primary')
+  if (originalAccent) root.style.setProperty('--accent', originalAccent)
+  else root.style.removeProperty('--accent')
+  if (originalLanguage === null) root.removeAttribute('lang')
+  else root.setAttribute('lang', originalLanguage)
+  if (createdFavicon) favicon?.remove()
+  else if (originalFavicon) {
+    if (originalFaviconHref === null) originalFavicon.removeAttribute('href')
+    else originalFavicon.setAttribute('href', originalFaviconHref)
+  }
+}
+
+watch(site, applySite)
 
 function openInbox(session: AddressSession, updatePath = true): void {
   current.value = session
@@ -105,6 +153,7 @@ onBeforeUnmount(() => {
   navigationVersion += 1
   siteVersion += 1
   window.removeEventListener('popstate', handlePopState)
+  cleanupSite()
 })
 </script>
 
@@ -119,7 +168,10 @@ onBeforeUnmount(() => {
       title="Configured site header"
     />
     <header class="site-header">
-      <a class="brand" href="/" aria-label="Temporary Mail home">{{ site?.appName || 'tmail' }}</a>
+      <a class="brand" href="/" :aria-label="`${site?.appName || 'tmail'} home`">
+        <img v-if="site?.logoDataUrl" :src="site.logoDataUrl" alt="">
+        <span>{{ site?.appName || 'tmail' }}</span>
+      </a>
       <nav aria-label="Site navigation">
         <a href="/docs">API docs</a>
         <a href="/admin">Admin</a>
@@ -154,6 +206,15 @@ onBeforeUnmount(() => {
 
       <AddressPanel v-else :initial-error="error" @open="openCreatedInbox" />
     </main>
+
+    <section
+      v-if="site?.cookieEnabled && site.cookieText"
+      class="cookie-notice"
+      role="status"
+      aria-label="Cookie notice"
+    >
+      {{ site.cookieText }}
+    </section>
 
     <SandboxFrame
       v-if="site?.footerHtml"

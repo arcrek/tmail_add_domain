@@ -50,7 +50,13 @@ def client(config_path):
 
 
 def test_spa_serves_home_admin_and_address_routes(client, frontend_dist):
-    for path in ["/", "/admin", "/box@example.com"]:
+    for path in [
+        "/",
+        "/admin",
+        "/box@example.com",
+        "/box@disabled.example",
+        "/bad..local@example.com",
+    ]:
         response = client.get(path)
         assert response.status_code == 200
         assert '<div id="app"></div>' in response.text
@@ -66,7 +72,7 @@ def test_api_and_docs_are_not_shadowed_by_spa(client):
     assert '<div id="app"></div>' not in mismatch.text
     assert client.get("/admin/api/settings").status_code == 401
     assert '<div id="app"></div>' not in client.get("/not-an-address").text
-    assert client.get("/box@other.example").status_code == 404
+    assert client.get("/box@other.example").status_code == 200
 
 
 def test_assets_are_served_with_immutable_cache(client):

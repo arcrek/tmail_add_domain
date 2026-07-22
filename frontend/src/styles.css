@@ -7,8 +7,10 @@
   --ink: #24231f;
   --muted: #65635c;
   --line: #b8b3a7;
-  --indigo: #45478f;
-  --indigo-dark: #34366f;
+  --primary: #45478f;
+  --accent: #34366f;
+  --indigo: var(--primary);
+  --indigo-dark: var(--accent);
   --green: #2f6b4f;
   --red: #96373a;
   --radius: 3px;
@@ -113,6 +115,25 @@ h2 {
   font-weight: 750;
   letter-spacing: -0.08em;
   text-decoration: none;
+}
+
+.brand img {
+  display: block;
+  width: auto;
+  max-width: 9rem;
+  height: 2rem;
+  object-fit: contain;
+}
+
+.brand img + span {
+  margin-left: 0.6rem;
+}
+
+.cookie-notice {
+  padding: 1rem 2rem;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  background: var(--paper-raised);
 }
 
 .site-header nav {

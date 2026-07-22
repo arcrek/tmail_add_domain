@@ -8,7 +8,7 @@ import threading
 from src.api_state import StateStore
 from src.config import ConfigStore
 from src.domain_cache import DomainCache
-from src.jmap_client import JmapClient
+from src.jmap_client import JmapClient, JmapUpstreamError
 from src.mx_checker import MxLookupError, mx_matches
 
 logging.basicConfig(
@@ -97,7 +97,11 @@ def main() -> None:
     _jmap = JmapClient(_config.jmap_url, _config.jmap_token, _config.catchall_address)
     _jmap_fingerprint = (_config.jmap_url, _config.jmap_token, _config.catchall_address)
 
-    existing = _jmap.list_domains()
+    try:
+        existing = _jmap.list_domains()
+    except JmapUpstreamError:
+        existing = []
+        logger.warning("Could not pre-load domains from Stalwart; retaining cache")
     if existing:
         _cache.add_many(existing)
         logger.info("Pre-loaded %d domains from Stalwart", len(existing))

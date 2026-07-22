@@ -1,9 +1,19 @@
 from __future__ import annotations
 import json
+import multiprocessing
 import os
 import pytest
 from unittest.mock import MagicMock
 from src.domain_cache import DomainCache
+
+
+def _add_after_stale_load(path, ready, proceed):
+    cache = DomainCache(path)
+    cache.load()
+    ready.set()
+    if not proceed.wait(5):
+        raise RuntimeError("parent did not release cache writer")
+    cache.add("new.example")
 
 def test_empty_on_missing_file(tmp_path):
     cache = DomainCache(str(tmp_path / "domains.json"))
@@ -35,6 +45,21 @@ def test_corrupt_file_resets_to_empty(tmp_path):
     cache = DomainCache(str(f))
     cache.load()
     assert not cache.contains("example.com")
+
+
+def test_missing_or_corrupt_reload_retains_last_valid_snapshot(tmp_path):
+    path = tmp_path / "domains.json"
+    path.write_text('["last-valid.example"]')
+    cache = DomainCache(str(path))
+    cache.load()
+
+    path.unlink()
+    cache.load()
+    assert cache.domains() == ["last-valid.example"]
+
+    path.write_text("not json")
+    cache.load()
+    assert cache.domains() == ["last-valid.example"]
 
 def test_no_tmp_file_left_after_write(tmp_path):
     path = str(tmp_path / "domains.json")
@@ -79,3 +104,44 @@ def test_replace_failure_keeps_memory_and_file(tmp_path, monkeypatch):
 
     assert cache.domains() == ["old.example"]
     assert json.loads(path.read_text()) == ["old.example"]
+
+
+def test_stale_process_add_reloads_before_merge_without_resurrecting(tmp_path):
+    path = tmp_path / "domains.json"
+    path.write_text('["old.example"]')
+    context = multiprocessing.get_context("fork")
+    ready = context.Event()
+    proceed = context.Event()
+    process = context.Process(target=_add_after_stale_load, args=(str(path), ready, proceed))
+    process.start()
+    try:
+        assert ready.wait(2)
+        authoritative = DomainCache(str(path))
+        authoritative.load()
+        authoritative.replace(["authoritative.example"])
+        proceed.set()
+        process.join(5)
+        assert process.exitcode == 0
+        assert json.loads(path.read_text()) == ["authoritative.example", "new.example"]
+    finally:
+        proceed.set()
+        process.join(5)
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+
+
+def test_authoritative_replace_rejects_a_changed_generation(tmp_path):
+    path = tmp_path / "domains.json"
+    path.write_text('["old.example"]')
+    replacement = DomainCache(str(path))
+    replacement.load()
+    generation = replacement.generation()
+
+    policy = DomainCache(str(path))
+    policy.load()
+    policy.add("provisioned.example")
+
+    assert replacement.replace(["authoritative.example"], expected_generation=generation) is False
+    assert replacement.domains() == ["old.example", "provisioned.example"]
+    assert json.loads(path.read_text()) == ["old.example", "provisioned.example"]

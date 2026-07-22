@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ApiError, api } from '../api'
 import { loadSessions, removeSession } from '../session'
 import type { AddressSession, DomainResource } from '../types'
@@ -22,6 +22,8 @@ const address = computed(() =>
     ? `${localPart.value.trim().toLowerCase()}@${selectedDomain.value}`
     : '',
 )
+
+watch(address, () => { copied.value = false })
 
 const message = (value: unknown) =>
   value instanceof ApiError ? value.message : 'The mail service is unavailable. Try again.'

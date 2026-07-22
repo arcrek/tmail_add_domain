@@ -179,6 +179,39 @@ describe('InboxView polling', () => {
     finishRefresh?.(collection(['one'], { next: true }))
   })
 
+  it('resets state and ignores stale results when the address session changes', async () => {
+    let finishOldRefresh: ((value: ReturnType<typeof collection>) => void) | undefined
+    mocks.messages
+      .mockResolvedValueOnce(collection(['old-one'], { next: true }))
+      .mockResolvedValueOnce(collection(['old-two'], { page: 2, previous: true }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOldRefresh = resolve }))
+      .mockResolvedValueOnce(collection(['new-one']))
+    const wrapper = mount(InboxView, {
+      props: { session: { address: 'old@example.com', token: 'old-token' }, fetchSeconds: 30 },
+    })
+    await flushPromises()
+    await wrapper.get('.pagination button:last-child').trigger('click')
+    await flushPromises()
+    await wrapper.get('.message-row').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.message-reader').exists()).toBe(true)
+
+    await wrapper.get('[data-action="refresh"]').trigger('click')
+    await wrapper.setProps({ session: { address: 'new@example.com', token: 'new-token' } })
+    await flushPromises()
+
+    expect(mocks.messages).toHaveBeenLastCalledWith('new-token', 1)
+    expect(wrapper.text()).toContain('new@example.com')
+    expect(wrapper.text()).toContain('Message new-one')
+    expect(wrapper.text()).not.toContain('Message old-two')
+    expect(wrapper.find('.message-reader').exists()).toBe(false)
+
+    finishOldRefresh?.(collection(['stale-old'], { page: 2, previous: true }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('Message new-one')
+    expect(wrapper.text()).not.toContain('Message stale-old')
+  })
+
   it('notifies only for new page-one IDs without exposing message metadata', async () => {
     const notifications: Array<[string, NotificationOptions | undefined]> = []
     const requestPermission = vi.fn().mockResolvedValue('granted')

@@ -80,7 +80,9 @@ def fake_jmap():
     fake.get_message.return_value = dict(MESSAGE)
     fake.set_seen.return_value = True
     fake.delete_message.return_value = True
-    fake.download_blob.return_value = (b"payload", "text/plain")
+    fake.download_blob.side_effect = lambda _account, _blob, _name, content_type: (
+        iter([b"pay", b"load"]), content_type
+    )
     return fake
 
 
@@ -289,11 +291,15 @@ def test_attachment_and_source_stream_after_owner_check(client, bearer, fake_jma
     attachment = client.get("/messages/m1/attachments/attachment-1", headers=bearer)
     source = client.get("/sources/m1", headers=bearer)
     assert attachment.content == source.content == b"payload"
-    assert attachment.headers["content-type"] == "application/octet-stream"
+    assert attachment.headers["content-type"] == "text/plain; charset=utf-8"
     assert source.headers["content-type"] == "message/rfc822"
     assert "notes.txt" in attachment.headers["content-disposition"]
     assert "m1.eml" in source.headers["content-disposition"]
     assert fake_jmap.get_message.call_count == 2
+    assert fake_jmap.download_blob.call_args_list == [
+        call("mail-account", "attachment-1", "notes.txt", "text/plain"),
+        call("mail-account", "source-1", "m1.eml", "message/rfc822"),
+    ]
 
 
 def test_unknown_attachment_is_not_downloaded(client, bearer, fake_jmap):
@@ -329,6 +335,30 @@ def test_request_validation_and_jmap_failure_use_hydra(client, bearer, fake_jmap
     assert failed.status_code == 502
     assert failed.json()["@type"] == "hydra:Error"
     assert "private upstream detail" not in failed.text
+
+
+def test_token_rejects_oversized_declared_body_before_json_parsing(client):
+    response = client.post(
+        "/token",
+        content=b'{}',
+        headers={"content-type": "application/json", "content-length": "9000"},
+    )
+
+    assert response.status_code == 413, response.text
+    assert response.json()["@type"] == "hydra:Error"
+
+
+@pytest.mark.parametrize("headers", [
+    {"content-type": "application/json", "transfer-encoding": "chunked"},
+    {"content-type": "application/json", "content-length": "2"},
+])
+def test_token_rejects_oversized_stream_with_missing_or_deceptive_length(client, headers):
+    payload = b'{"address":"box@example.com","padding":"' + b"x" * 9000 + b'"}'
+
+    response = client.post("/token", content=iter([payload[:4000], payload[4000:]]), headers=headers)
+
+    assert response.status_code == 413, response.text
+    assert response.json()["@type"] == "hydra:Error"
 
 
 def test_security_headers_and_token_rate_limit(client):
@@ -376,6 +406,7 @@ def test_openapi_documents_passwordless_bearer_contract(client):
     assert "/token" in schema["paths"]
     assert "/messages/{message_id}" in schema["paths"]
     assert schema["paths"]["/messages"]["get"]["security"] == [{"HTTPBearer": []}]
+    assert "413" in schema["paths"]["/token"]["post"]["responses"]
     assert "429" in schema["paths"]["/token"]["post"]["responses"]
     attachment = schema["paths"]["/messages/{message_id}/attachments/{blob_id}"]["get"]
     assert attachment["responses"]["200"]["content"]["application/octet-stream"]["schema"] == {

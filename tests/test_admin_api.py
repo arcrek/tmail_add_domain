@@ -11,6 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api_server import create_app
+from src.domain_cache import DomainCache
+from src.jmap_client import JmapUpstreamError
 
 
 @pytest.fixture
@@ -101,6 +103,21 @@ def test_settings_mask_secret_and_require_csrf(admin_client):
     response = admin_client.get("/admin/api/settings")
     assert response.json()["mailServer"]["jmapToken"] == "********"
     assert admin_client.put("/admin/api/settings", json={}).status_code == 403
+
+
+def test_admin_json_rejects_oversized_declared_body_before_parsing(admin_client):
+    response = admin_client.put(
+        "/admin/api/settings",
+        content=b"{}",
+        headers={
+            **admin_client.csrf,
+            "content-type": "application/json",
+            "content-length": str(4 * 1024 * 1024 + 1),
+        },
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "Request body too large"}
 
 
 def test_csrf_mismatch_is_rejected(admin_client):
@@ -207,6 +224,30 @@ def test_sync_now_replaces_cache_only_on_success(admin_client, fake_jmap, cache_
     response = admin_client.post("/admin/api/sync-domains", headers=admin_client.csrf)
     assert response.status_code == 200
     assert json.loads(cache_file.read_text()) == ["new.example"]
+
+
+def test_sync_retries_when_policy_adds_during_authoritative_fetch(
+    admin_client, fake_jmap, cache_file
+):
+    calls = 0
+
+    def domains():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            policy = DomainCache(str(cache_file))
+            policy.load()
+            policy.add("provisioned.example")
+            return ["old.example"]
+        return ["old.example", "provisioned.example"]
+
+    fake_jmap.list_domains.side_effect = domains
+
+    response = admin_client.post("/admin/api/sync-domains", headers=admin_client.csrf)
+
+    assert response.status_code == 200
+    assert fake_jmap.list_domains.call_count == 2
+    assert json.loads(cache_file.read_text()) == ["old.example", "provisioned.example"]
 
 
 def test_sync_updates_frozen_snapshot_when_auto_sync_is_off(admin_client, fake_jmap):
@@ -420,6 +461,16 @@ def test_failed_jmap_test_returns_bad_gateway(admin_client, fake_jmap):
     response = admin_client.post("/admin/api/test-mail", headers=admin_client.csrf)
     assert response.status_code == 502
     assert "unavailable" not in response.text
+
+
+def test_jmap_method_error_cannot_report_successful_mail_test(admin_client, fake_jmap):
+    fake_jmap.list_domains.side_effect = JmapUpstreamError()
+
+    response = admin_client.post("/admin/api/test-mail", headers=admin_client.csrf)
+
+    assert response.status_code == 502
+    assert response.json()["@type"] == "hydra:Error"
+    assert "JMAP upstream request failed" not in response.text
 
 
 def test_dashboard_combines_jmap_and_activity(admin_client, fake_jmap):

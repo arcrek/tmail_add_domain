@@ -5,7 +5,7 @@ Temporary-mail web app and API backed by Stalwart JMAP. Postfix asks the policy 
 ## Requirements
 
 - Python 3.10+
-- Node.js 20+ and npm
+- Node.js `^20.19.0 || >=22.12.0`, and npm
 - Postfix
 - Stalwart with JMAP enabled
 - A Stalwart bearer token allowed to manage domains and read the catch-all mailbox

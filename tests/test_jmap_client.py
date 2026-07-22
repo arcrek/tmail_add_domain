@@ -1,7 +1,7 @@
 from __future__ import annotations
 import pytest
 from unittest.mock import patch, MagicMock
-from src.jmap_client import JmapClient
+from src.jmap_client import JmapClient, JmapUpstreamError
 
 CLIENT = JmapClient(
     "https://mail.tm-mails.com/jmap/",
@@ -40,14 +40,19 @@ def test_list_domains_success():
         result = CLIENT.list_domains()
     assert result == ["example.com", "test.org"]
 
-def test_list_domains_network_error_returns_empty():
+def test_list_domains_network_error_raises_sanitized_error():
     with patch("src.jmap_client.httpx.post", side_effect=Exception("timeout")):
-        assert CLIENT.list_domains() == []
+        with pytest.raises(JmapUpstreamError, match="JMAP upstream request failed"):
+            CLIENT.list_domains()
 
-def test_list_domains_unexpected_response_returns_empty():
-    resp = {"methodResponses": [["error", {"type": "unknownMethod"}, "0"]]}
+def test_list_domains_method_error_raises_sanitized_error():
+    resp = {"methodResponses": [["error", {
+        "type": "unknownMethod", "description": "private upstream detail",
+    }, "0"]]}
     with patch("src.jmap_client.httpx.post", return_value=_mock_response(resp)):
-        assert CLIENT.list_domains() == []
+        with pytest.raises(JmapUpstreamError) as caught:
+            CLIENT.list_domains()
+    assert "private upstream detail" not in str(caught.value)
 
 def test_provision_sends_correct_domain_name():
     captured = {}

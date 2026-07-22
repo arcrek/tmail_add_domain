@@ -65,7 +65,10 @@ describe('address flow', () => {
     })
   })
 
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
 
   it('hands a direct address link into the inbox without another action', async () => {
     history.replaceState({}, '', '/Box%40Example.com')
@@ -94,6 +97,64 @@ describe('address flow', () => {
     expect(wrapper.text()).not.toContain('Configured header')
   })
 
+  it('applies and cleans up configured branding, language, favicon, and cookie notice', async () => {
+    const root = document.documentElement
+    const originalLanguage = root.lang
+    root.style.setProperty('--primary', '#111111')
+    root.style.setProperty('--accent', '#222222')
+    const favicon = document.createElement('link')
+    favicon.rel = 'icon'
+    favicon.href = '/original.ico'
+    document.head.append(favicon)
+    mocks.site.mockResolvedValueOnce({
+      appName: 'Configured Mail',
+      logoDataUrl: 'data:image/png;base64,bG9nbw==',
+      faviconDataUrl: 'data:image/png;base64,aWNvbg==',
+      primaryColor: '#123456',
+      accentColor: '#654321',
+      language: 'de',
+      cookieEnabled: true,
+      cookieText: 'This site uses a necessary preference cookie.',
+      fetchSeconds: 20,
+      messageLimit: 100,
+      headerHtml: '',
+      footerHtml: '',
+      contentCss: '',
+      adSlots: {},
+    })
+
+    const wrapper = mount(App)
+    await flushPromises()
+
+    expect(wrapper.get('.brand img').attributes('src')).toBe('data:image/png;base64,bG9nbw==')
+    expect(wrapper.get('.brand').attributes('aria-label')).toBe('Configured Mail home')
+    expect(wrapper.get('[role="status"][aria-label="Cookie notice"]').text()).toContain('necessary preference cookie')
+    expect(root.style.getPropertyValue('--primary')).toBe('#123456')
+    expect(root.style.getPropertyValue('--accent')).toBe('#654321')
+    expect(root.lang).toBe('de')
+    expect(favicon.getAttribute('href')).toBe('data:image/png;base64,aWNvbg==')
+
+    wrapper.unmount()
+    expect(root.style.getPropertyValue('--primary')).toBe('#111111')
+    expect(root.style.getPropertyValue('--accent')).toBe('#222222')
+    expect(root.lang).toBe(originalLanguage)
+    expect(favicon.getAttribute('href')).toBe('/original.ico')
+    favicon.remove()
+    root.style.removeProperty('--primary')
+    root.style.removeProperty('--accent')
+  })
+
+  it('hands malformed address-shaped links to token validation for a clear error', async () => {
+    history.replaceState({}, '', '/bad..local@example.com')
+    mocks.token.mockRejectedValueOnce(new ApiError(422, 'Invalid address'))
+
+    const wrapper = mount(App)
+    await flushPromises()
+
+    expect(mocks.token).toHaveBeenCalledWith('bad..local@example.com')
+    expect(wrapper.text()).toContain('Invalid address')
+  })
+
   it('opens a tokenized inbox when browser storage denies writes', async () => {
     history.replaceState({}, '', '/box@example.com')
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
@@ -119,6 +180,21 @@ describe('address flow', () => {
     expect(wrapper.emitted('open')?.[0]).toEqual([
       { address: 'paper@example.com', token: 'signed-token' },
     ])
+  })
+
+  it('resets copied state when the composed address changes', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const wrapper = mount(AddressPanel)
+    await flushPromises()
+    await wrapper.get('#local-part').setValue('paper')
+    await wrapper.get('.address-preview button').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.address-preview button').text()).toBe('Copied')
+
+    await wrapper.get('#local-part').setValue('changed')
+
+    expect(wrapper.get('.address-preview button').text()).toBe('Copy')
   })
 
   it('shows a useful empty-domain state', async () => {

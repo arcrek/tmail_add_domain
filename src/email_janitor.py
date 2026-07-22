@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from .config import load_config
+from .jmap_client import JmapClient
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +75,12 @@ def run(config_path: str) -> None:
         "Authorization": f"Bearer {cfg.jmap_token}",
         "Content-Type": "application/json",
     }
-    account_id = "b"
     total_deleted = 0
 
     with httpx.Client(headers=headers) as client:
+        account_id = cfg.mail_account_id or JmapClient(
+            cfg.jmap_url, cfg.jmap_token, cfg.catchall_address, client=client
+        ).discover_mail_account_id()
         while True:
             ids = _query_old_emails(client, cfg.jmap_url, account_id, before_utc)
             if not ids:

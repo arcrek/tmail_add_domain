@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.jmap_client import JmapClient
+from src.jmap_client import JmapClient, JmapUpstreamError
 
 
 MAIL_CAPABILITY = "urn:ietf:params:jmap:mail"
@@ -14,14 +15,6 @@ MAIL_CAPABILITY = "urn:ietf:params:jmap:mail"
 def response(json_body: dict) -> MagicMock:
     result = MagicMock()
     result.json.return_value = json_body
-    result.raise_for_status = MagicMock()
-    return result
-
-
-def blob_response(content: bytes, content_type: str) -> MagicMock:
-    result = MagicMock()
-    result.content = content
-    result.headers = {"content-type": content_type}
     result.raise_for_status = MagicMock()
     return result
 
@@ -91,38 +84,98 @@ def test_get_message_requests_full_body_and_attachment_fields(client, mocked_pos
     assert message["attachments"][0]["blobId"] == "a1"
     properties = mocked_post.call_args.kwargs["json"]["methodCalls"][0][1]["properties"]
     assert {"bodyValues", "textBody", "htmlBody", "attachments", "bodyStructure"} <= set(properties)
+    arguments = mocked_post.call_args.kwargs["json"]["methodCalls"][0][1]
+    assert arguments["fetchTextBodyValues"] is True
+    assert arguments["fetchHTMLBodyValues"] is True
 
 
-def test_get_set_delete_and_blob_use_mail_account(client, mocked_post, mocked_get):
+def test_get_set_delete_use_mail_account(client, mocked_post):
     mocked_post.side_effect = [
         response({"methodResponses": [["Email/get", {"list": [{"id": "m1", "blobId": "b1"}]}, "0"]]}),
         response({"methodResponses": [["Email/set", {"updated": {"m1": None}}, "0"]]}),
         response({"methodResponses": [["Email/set", {"destroyed": ["m1"]}, "0"]]}),
     ]
-    mocked_get.side_effect = [
-        response({"downloadUrl": "https://mail.example/download/{accountId}/{blobId}/{name}"}),
-        blob_response(b"raw", "message/rfc822"),
-    ]
-
     assert client.get_message("mail-account", "m1")["blobId"] == "b1"
     assert client.set_seen("mail-account", "m1", True)
     assert client.delete_message("mail-account", "m1")
-    assert client.download_blob("mail-account", "b1", "message.eml") == (b"raw", "message/rfc822")
 
     calls = [call.kwargs["json"]["methodCalls"][0][1] for call in mocked_post.call_args_list]
     assert calls[1]["accountId"] == "mail-account"
     assert calls[1]["update"]["m1"]["keywords/$seen"] is True
     assert calls[2] == {"accountId": "mail-account", "destroy": ["m1"]}
-    assert mocked_get.call_args_list[1].args[0] == "https://mail.example/download/mail-account/b1/message.eml"
 
 
-def test_jmap_method_errors_return_safe_empty_values(client, mocked_post):
-    mocked_post.return_value = response({"methodResponses": [["error", {"type": "serverFail"}, "0"]]})
+def test_download_blob_substitutes_type_and_streams_inside_owned_context():
+    events = []
 
-    assert client.list_messages("mail-account", "box@example.com", 15, 0) == (0, [])
-    assert client.get_message("mail-account", "m1") is None
-    assert client.set_seen("mail-account", "m1", True) is False
-    assert client.delete_message("mail-account", "m1") is False
+    class StreamResponse:
+        headers = {"content-type": "message/rfc822; charset=binary"}
+
+        def raise_for_status(self):
+            events.append("status")
+
+        def iter_bytes(self):
+            assert "closed" not in events
+            yield b"ra"
+            yield b"w"
+
+    class StreamingClient:
+        def get(self, *_args, **_kwargs):
+            return response({
+                "primaryAccounts": {MAIL_CAPABILITY: "mail-account"},
+                "accounts": {"mail-account": {"isPersonal": True}},
+                "downloadUrl": "https://mail.example/download/{accountId}/{blobId}/{name}?type={type}",
+            })
+
+        @contextmanager
+        def stream(self, method, url, **kwargs):
+            events.append((method, url, kwargs))
+            events.append("entered")
+            yield StreamResponse()
+            events.append("closed")
+
+    client = JmapClient(
+        "https://mail.example/jmap", "token123", "admin@example.com", client=StreamingClient()
+    )
+
+    chunks, content_type = client.download_blob(
+        "mail-account", "b1", "message.eml", "message/rfc822"
+    )
+
+    assert events == []
+    assert b"".join(chunks) == b"raw"
+    assert content_type == "message/rfc822"
+    assert events[0][0:2] == (
+        "GET",
+        "https://mail.example/download/mail-account/b1/message.eml?type=message%2Frfc822",
+    )
+    assert events[-1] == "closed"
+
+
+@pytest.mark.parametrize("method_response", [
+    ["error", {"type": "serverFail", "description": "private upstream detail"}, "0"],
+    ["Email/set", {"updated": {"m1": None}}, "wrong-call-id"],
+    ["Email/query", {"total": 1}, "0"],
+])
+def test_jmap_method_errors_and_mismatches_raise_sanitized_error(
+    client, mocked_post, method_response
+):
+    mocked_post.return_value = response({"methodResponses": [method_response]})
+
+    with pytest.raises(JmapUpstreamError) as caught:
+        client.set_seen("mail-account", "m1", True)
+
+    assert str(caught.value) == "JMAP upstream request failed"
+    assert "private upstream detail" not in str(caught.value)
+
+
+def test_jmap_unexpected_method_payload_raises_sanitized_error(client, mocked_post):
+    mocked_post.return_value = response({
+        "methodResponses": [["Email/get", {"list": {"private": "detail"}}, "0"]]
+    })
+
+    with pytest.raises(JmapUpstreamError, match="JMAP upstream request failed"):
+        client.get_message("mail-account", "m1")
 
 
 def test_message_counts_uses_total_queries_for_stored_today_and_seven_days(client, mocked_post, monkeypatch):

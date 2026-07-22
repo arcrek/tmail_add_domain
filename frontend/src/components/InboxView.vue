@@ -139,6 +139,22 @@ function removeStale(): void {
   void refresh()
 }
 
+function resetSession(): void {
+  requestVersion += 1
+  page.value = 1
+  collection.value = null
+  selectedId.value = null
+  loading.value = true
+  refreshing.value = false
+  error.value = ''
+  notice.value = ''
+  initialized = false
+  knownIds = new Set<string>()
+  void refresh()
+  startPolling()
+}
+
+watch([() => props.session.address, () => props.session.token], resetSession)
 watch(() => props.fetchSeconds, startPolling)
 
 onMounted(() => {

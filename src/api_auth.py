@@ -94,10 +94,10 @@ class AddressToken:
         return data["address"]
 
 
-def active_domains(cache_file: str, state) -> list[str]:
+def active_domains(cache_file: str | DomainCache, state) -> list[str]:
     if not state.get_settings()["auto_sync_domains"]:
         return state.get_frozen_domains()
-    cache = DomainCache(cache_file)
+    cache = cache_file if isinstance(cache_file, DomainCache) else DomainCache(cache_file)
     cache.load()
     domains = []
     for value in cache.domains():

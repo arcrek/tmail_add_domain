@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 import logging
 from urllib.parse import quote
@@ -18,6 +19,12 @@ _MESSAGE_PROPERTIES = _SUMMARY_PROPERTIES + [
     "bodyValues", "textBody", "htmlBody", "attachments", "bodyStructure",
 ]
 
+
+class JmapUpstreamError(RuntimeError):
+    def __init__(self):
+        super().__init__("JMAP upstream request failed")
+
+
 class JmapClient:
     def __init__(self, url: str, token: str, catchall_address: str, client=None):
         self._url = url
@@ -30,20 +37,45 @@ class JmapClient:
         self._session = None
 
     def _call(self, method_calls: list, using: list[str]) -> list:
-        response = self._client.post(
-            self._url,
-            json={"using": using, "methodCalls": method_calls},
-            headers=self._headers,
-            timeout=30,
-        )
-        response.raise_for_status()
-        return response.json().get("methodResponses", [])
+        try:
+            response = self._client.post(
+                self._url,
+                json={"using": using, "methodCalls": method_calls},
+                headers=self._headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            raise JmapUpstreamError() from None
+        if not isinstance(payload, dict) or not isinstance(payload.get("methodResponses"), list):
+            raise JmapUpstreamError()
+        method_responses = payload["methodResponses"]
+        if len(method_responses) != len(method_calls):
+            raise JmapUpstreamError()
+        for expected, received in zip(method_calls, method_responses):
+            if (
+                not isinstance(received, list)
+                or len(received) != 3
+                or received[0] == "error"
+                or received[0] != expected[0]
+                or received[2] != expected[2]
+                or not isinstance(received[1], dict)
+            ):
+                raise JmapUpstreamError()
+        return method_responses
 
     def _get_session(self) -> dict:
         if self._session is None:
-            response = self._client.get(self._url, headers=self._headers, timeout=30)
-            response.raise_for_status()
-            self._session = response.json()
+            try:
+                response = self._client.get(self._url, headers=self._headers, timeout=30)
+                response.raise_for_status()
+                payload = response.json()
+            except Exception:
+                raise JmapUpstreamError() from None
+            if not isinstance(payload, dict):
+                raise JmapUpstreamError()
+            self._session = payload
         return self._session
 
     def provision_domain(self, domain: str) -> bool:
@@ -76,10 +108,10 @@ class JmapClient:
                 not_created = data.get("notCreated", {}).get("new-0", {})
                 if not_created.get("type") == "alreadyExists":
                     return True
-            logger.error("JMAP provision failed for %s: %s", domain, method_resp)
+            logger.error("JMAP provision failed for %s", domain)
             return False
-        except Exception as exc:
-            logger.error("JMAP error provisioning %s: %s", domain, exc)
+        except Exception:
+            logger.error("JMAP error provisioning %s", domain)
             return False
 
     def list_domains(self) -> list:
@@ -88,23 +120,32 @@ class JmapClient:
                 {"accountId": "b", "ids": None},
                 "0",
             ]]
-        try:
-            method_resp = self._call(method_calls, _USING)[0]
-            if method_resp[0] == "x:Domain/get":
-                return [d["name"] for d in method_resp[1].get("list", [])]
-            logger.warning("Unexpected response for Domain/get: %s", method_resp)
-            return []
-        except Exception as exc:
-            logger.error("JMAP list_domains error: %s", exc)
-            return []
+        method_resp = self._call(method_calls, _USING)[0]
+        values = method_resp[1].get("list")
+        if not isinstance(values, list) or any(
+            not isinstance(domain, dict) or not isinstance(domain.get("name"), str)
+            for domain in values
+        ):
+            raise JmapUpstreamError()
+        return [domain["name"] for domain in values]
 
     def discover_mail_account_id(self) -> str:
         session = self._get_session()
-        account_id = session.get("primaryAccounts", {}).get(_MAIL_CAPABILITY)
+        primary_accounts = session.get("primaryAccounts", {})
+        accounts = session.get("accounts", {})
+        if not isinstance(primary_accounts, dict) or not isinstance(accounts, dict):
+            raise JmapUpstreamError()
+        account_id = primary_accounts.get(_MAIL_CAPABILITY)
         if account_id:
+            if not isinstance(account_id, str):
+                raise JmapUpstreamError()
             return account_id
-        for candidate, account in session.get("accounts", {}).items():
+        for candidate, account in accounts.items():
+            if not isinstance(candidate, str) or not isinstance(account, dict):
+                raise JmapUpstreamError()
             capabilities = account.get("accountCapabilities", {})
+            if not isinstance(capabilities, dict):
+                raise JmapUpstreamError()
             if account.get("isPersonal") and _MAIL_CAPABILITY in capabilities:
                 return candidate
         raise ValueError("JMAP session has no personal mail account")
@@ -126,39 +167,88 @@ class JmapClient:
                 "properties": _SUMMARY_PROPERTIES,
             }, "g"],
         ], _MAIL_USING)
-        if len(method_responses) < 2 or method_responses[0][0] != "Email/query" or method_responses[1][0] != "Email/get":
-            return 0, []
-        return method_responses[0][1].get("total", 0), method_responses[1][1].get("list", [])
+        total = method_responses[0][1].get("total")
+        messages = method_responses[1][1].get("list")
+        if type(total) is not int or total < 0 or not isinstance(messages, list) or any(
+            not isinstance(message, dict) for message in messages
+        ):
+            raise JmapUpstreamError()
+        return total, messages
 
     def get_message(self, account_id: str, message_id: str) -> dict | None:
         method_responses = self._call([[
-            "Email/get", {"accountId": account_id, "ids": [message_id], "properties": _MESSAGE_PROPERTIES}, "0",
+            "Email/get", {
+                "accountId": account_id,
+                "ids": [message_id],
+                "properties": _MESSAGE_PROPERTIES,
+                "fetchTextBodyValues": True,
+                "fetchHTMLBodyValues": True,
+            }, "0",
         ]], _MAIL_USING)
-        if not method_responses or method_responses[0][0] != "Email/get":
-            return None
         messages = method_responses[0][1].get("list", [])
+        if not isinstance(messages, list) or any(not isinstance(message, dict) for message in messages):
+            raise JmapUpstreamError()
         return messages[0] if messages else None
 
     def set_seen(self, account_id: str, message_id: str, seen: bool) -> bool:
         method_responses = self._call([[
             "Email/set", {"accountId": account_id, "update": {message_id: {"keywords/$seen": seen}}}, "0",
         ]], _MAIL_USING)
-        return bool(method_responses and method_responses[0][0] == "Email/set" and message_id in method_responses[0][1].get("updated", {}))
+        updated = method_responses[0][1].get("updated", {})
+        if not isinstance(updated, dict):
+            raise JmapUpstreamError()
+        return message_id in updated
 
     def delete_message(self, account_id: str, message_id: str) -> bool:
         method_responses = self._call([[
             "Email/set", {"accountId": account_id, "destroy": [message_id]}, "0",
         ]], _MAIL_USING)
-        return bool(method_responses and method_responses[0][0] == "Email/set" and message_id in method_responses[0][1].get("destroyed", []))
+        destroyed = method_responses[0][1].get("destroyed", [])
+        if not isinstance(destroyed, list):
+            raise JmapUpstreamError()
+        return message_id in destroyed
 
-    def download_blob(self, account_id: str, blob_id: str, name: str) -> tuple[bytes, str]:
-        download_url = self._get_session()["downloadUrl"]
-        url = (download_url.replace("{accountId}", quote(account_id, safe=""))
-            .replace("{blobId}", quote(blob_id, safe=""))
-            .replace("{name}", quote(name, safe="")))
-        response = self._client.get(url, headers=self._headers, timeout=30)
-        response.raise_for_status()
-        return response.content, response.headers.get("content-type", "application/octet-stream").split(";", 1)[0]
+    def download_blob(
+        self,
+        account_id: str,
+        blob_id: str,
+        name: str,
+        content_type: str = "application/octet-stream",
+    ) -> tuple[Iterator[bytes], str]:
+        download_url = self._get_session().get("downloadUrl")
+        if not isinstance(download_url, str):
+            raise JmapUpstreamError()
+        substitutions = {
+            "accountId": account_id,
+            "blobId": blob_id,
+            "name": name,
+            "type": content_type,
+        }
+        url = download_url
+        for variable, value in substitutions.items():
+            url = url.replace(f"{{{variable}}}", quote(value, safe=""))
+        if "{" in url or "}" in url:
+            raise JmapUpstreamError()
+
+        def chunks():
+            try:
+                if self._client is httpx:
+                    with httpx.Client() as client:
+                        with client.stream(
+                            "GET", url, headers=self._headers, timeout=30
+                        ) as response:
+                            response.raise_for_status()
+                            yield from response.iter_bytes()
+                else:
+                    with self._client.stream(
+                        "GET", url, headers=self._headers, timeout=30
+                    ) as response:
+                        response.raise_for_status()
+                        yield from response.iter_bytes()
+            except Exception:
+                raise JmapUpstreamError() from None
+
+        return chunks(), content_type
 
     def message_counts(self, account_id: str) -> dict[str, int]:
         now = datetime.now(timezone.utc)
@@ -169,7 +259,12 @@ class JmapClient:
             ["Email/query", {"accountId": account_id, "calculateTotal": True, "filter": {"after": self._utc(today)}}, "today"],
             ["Email/query", {"accountId": account_id, "calculateTotal": True, "filter": {"after": self._utc(seven_days)}}, "sevenDays"],
         ], _MAIL_USING)
-        totals = {response[2]: response[1].get("total", 0) for response in method_responses if response[0] == "Email/query"}
+        totals = {}
+        for response in method_responses:
+            total = response[1].get("total")
+            if type(total) is not int or total < 0:
+                raise JmapUpstreamError()
+            totals[response[2]] = total
         return {"stored": totals.get("stored", 0), "today": totals.get("today", 0), "sevenDays": totals.get("sevenDays", 0)}
 
     @staticmethod

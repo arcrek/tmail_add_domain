@@ -183,10 +183,7 @@ def _active_domains(request: Request, settings: dict[str, object] | None = None)
     settings = settings or request.app.state.state_store.get_settings()
     if not settings["auto_sync_domains"]:
         return request.app.state.state_store.get_frozen_domains()
-    return active_domains(
-        request.app.state.config_store.get().cache_file,
-        request.app.state.state_store,
-    )
+    return active_domains(request.app.state.domain_cache, request.app.state.state_store)
 
 
 @router.post("/login")
@@ -267,19 +264,27 @@ def sync_domains(request: Request, _session_value: dict[str, object] = Depends(_
     with request.app.state.admin_lock:
         jmap = request.app.state.jmap
     try:
-        values = jmap.list_domains()
-        if not values:
-            raise ValueError("Stalwart returned no domains")
-        domains = _list(values, "domains", _domain)
-        if not domains:
-            raise ValueError("Stalwart returned no valid domains")
-        with request.app.state.admin_lock:
-            if request.app.state.jmap is not jmap:
-                raise RuntimeError("JMAP client changed during sync")
-            request.app.state.domain_cache.replace(domains)
-            if not state.get_settings()["auto_sync_domains"]:
-                state.replace_frozen_domains(domains)
-            state.record_sync(True, f"{len(domains)} domains")
+        for _attempt in range(3):
+            generation = request.app.state.domain_cache.generation()
+            values = jmap.list_domains()
+            if not values:
+                raise ValueError("Stalwart returned no domains")
+            domains = _list(values, "domains", _domain)
+            if not domains:
+                raise ValueError("Stalwart returned no valid domains")
+            with request.app.state.admin_lock:
+                if request.app.state.jmap is not jmap:
+                    raise RuntimeError("JMAP client changed during sync")
+                if not request.app.state.domain_cache.replace(
+                    domains, expected_generation=generation
+                ):
+                    continue
+                if not state.get_settings()["auto_sync_domains"]:
+                    state.replace_frozen_domains(domains)
+                state.record_sync(True, f"{len(domains)} domains")
+                break
+        else:
+            raise RuntimeError("Domain cache changed during sync")
     except Exception as exc:
         state.record_sync(False, type(exc).__name__)
         raise HTTPException(502, "Domain sync failed") from None

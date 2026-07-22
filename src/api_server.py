@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import hashlib
 import os
 from pathlib import Path
+import re
 import threading
 import time
 from urllib.parse import quote
@@ -54,7 +55,7 @@ _ERROR_RESPONSES = {
     422: {"model": HydraError},
     502: {"model": HydraError},
 }
-_TOKEN_RESPONSES = {**_ERROR_RESPONSES, 429: {"model": HydraError}}
+_TOKEN_RESPONSES = {**_ERROR_RESPONSES, 413: {"model": HydraError}, 429: {"model": HydraError}}
 _ATTACHMENT_RESPONSES = {
     **_ERROR_RESPONSES,
     200: {"description": "Attachment bytes", "content": {
@@ -67,6 +68,69 @@ _SOURCE_RESPONSES = {
         "message/rfc822": {"schema": {"type": "string", "format": "binary"}},
     }},
 }
+_PUBLIC_BODY_LIMIT = 8 * 1024
+_ADMIN_SETTINGS_BODY_LIMIT = 4 * 1024 * 1024
+
+
+class _BodyLimitMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] in {"GET", "HEAD", "OPTIONS"}:
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        limit = (
+            _ADMIN_SETTINGS_BODY_LIMIT
+            if path == "/admin/api/settings" and scope["method"] == "PUT"
+            else _PUBLIC_BODY_LIMIT
+        )
+        content_lengths = [
+            value for key, value in scope.get("headers", []) if key.lower() == b"content-length"
+        ]
+        try:
+            declared = int(content_lengths[0]) if len(content_lengths) == 1 else None
+            invalid_length = len(content_lengths) > 1 or (declared is not None and declared < 0)
+        except (ValueError, UnicodeDecodeError):
+            invalid_length = True
+            declared = None
+        if invalid_length or (declared is not None and declared > limit):
+            await self._reject(scope, receive, send)
+            return
+
+        received = 0
+        oversized = False
+
+        async def limited_receive():
+            nonlocal received, oversized
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    oversized = True
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return message
+
+        pending = []
+
+        async def buffered_send(message):
+            pending.append(message)
+
+        await self.app(scope, limited_receive, buffered_send)
+        if oversized:
+            await self._reject(scope, receive, send)
+            return
+        for message in pending:
+            await send(message)
+
+    @staticmethod
+    async def _reject(scope, receive, send):
+        if scope.get("path", "").startswith("/admin/api/"):
+            response = JSONResponse({"detail": "Request body too large"}, status_code=413)
+        else:
+            response = _error(413, "Request too large", "Request body too large")
+        await response(scope, receive, send)
 
 
 class _JsonLdResponse(JSONResponse):
@@ -100,8 +164,7 @@ def _stable_id(kind: str, value: str) -> str:
 
 
 def current_domains(request: Request, config: Config | None = None) -> list[str]:
-    cfg = config or request.app.state.config_store.get()
-    return active_domains(cfg.cache_file, request.app.state.state_store)
+    return active_domains(request.app.state.domain_cache, request.app.state.state_store)
 
 
 def _address(request: Request, value: str, config: Config | None = None) -> str:
@@ -289,6 +352,15 @@ def _download_headers(filename: str) -> dict[str, str]:
     return {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(safe_name, safe='')}"}
 
 
+def _media_type(value: object) -> str:
+    if not isinstance(value, str):
+        return "application/octet-stream"
+    candidate = value.split(";", 1)[0].strip().lower()
+    if not re.fullmatch(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+", candidate):
+        return "application/octet-stream"
+    return candidate
+
+
 def _collection_metadata(path: str, page: int, total: int, page_size: int) -> tuple[HydraView, HydraSearch]:
     last_page = max(1, (total + page_size - 1) // page_size)
     return HydraView(
@@ -436,9 +508,12 @@ def register_public_routes(app: FastAPI) -> None:
         if match is None:
             raise HTTPException(404, "Attachment not found")
         name = str(match.get("name") or "attachment")
-        content, _content_type = jmap.download_blob(account_id, blob_id, name)
+        content_type = _media_type(match.get("type"))
+        content, _content_type = jmap.download_blob(
+            account_id, blob_id, name, content_type
+        )
         return StreamingResponse(
-            iter([content]), media_type="application/octet-stream", headers=_download_headers(name)
+            content, media_type=content_type, headers=_download_headers(name)
         )
 
     @app.get("/sources/{message_id}", response_class=StreamingResponse, responses=_SOURCE_RESPONSES)
@@ -449,8 +524,10 @@ def register_public_routes(app: FastAPI) -> None:
         if not blob_id:
             raise HTTPException(404, "Message source not found")
         name = f"{message_id}.eml"
-        content, _content_type = jmap.download_blob(account_id, str(blob_id), name)
-        return StreamingResponse(iter([content]), media_type="message/rfc822", headers=_download_headers(name))
+        content, _content_type = jmap.download_blob(
+            account_id, str(blob_id), name, "message/rfc822"
+        )
+        return StreamingResponse(content, media_type="message/rfc822", headers=_download_headers(name))
 
 
 def create_app(config_path: str) -> FastAPI:
@@ -459,6 +536,7 @@ def create_app(config_path: str) -> FastAPI:
     state = StateStore(cfg.state_db)
     signer = AddressToken(cfg.api_token_secret)
     app = FastAPI(title="Temporary Mail API", docs_url="/docs", redoc_url="/redoc")
+    app.add_middleware(_BodyLimitMiddleware)
     app.state.config_store = config_store
     app.state.state_store = state
     app.state.signer = signer
@@ -507,11 +585,12 @@ def create_app(config_path: str) -> FastAPI:
     def spa_address(address: str, request: Request):
         if address in _POST_ONLY_ROUTES:
             raise HTTPException(405, "Method Not Allowed")
-        try:
-            if address in _SPA_RESERVED:
-                raise AddressValidationError("Reserved route")
-            _address(request, address)
-        except AddressValidationError:
+        if (
+            address in _SPA_RESERVED
+            or address.count("@") != 1
+            or address.startswith("@")
+            or address.endswith("@")
+        ):
             raise HTTPException(404, "Resource not found")
         return spa_index()
 
