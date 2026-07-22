@@ -14,6 +14,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.api_auth import AddressToken, AddressValidationError, active_domains, normalize_address
+from src.admin_api import router as admin_router
 from src.api_models import (
     AccountResource,
     AddressRequest,
@@ -33,6 +34,7 @@ from src.api_models import (
 )
 from src.api_state import StateStore
 from src.config import ConfigStore
+from src.domain_cache import DomainCache
 from src.jmap_client import JmapClient
 
 
@@ -433,12 +435,14 @@ def create_app(config_path: str) -> FastAPI:
     app.state.state_store = state
     app.state.signer = signer
     app.state.jmap = JmapClient(cfg.jmap_url, cfg.jmap_token, cfg.catchall_address)
+    app.state.domain_cache = DomainCache(cfg.cache_file)
+    app.state.domain_cache.load()
 
     limiter = _FixedWindowLimiter(limit=10, seconds=60)
 
     @app.middleware("http")
     async def security(request: Request, call_next):
-        if request.url.path in {"/token", "/admin/login"}:
+        if request.url.path in {"/token", "/admin/login", "/admin/api/login"}:
             client_ip = request.client.host if request.client else "unknown"
             if not limiter.allow((request.url.path, client_ip)):
                 response = _error(429, "Too many requests", "Try again later")
@@ -449,6 +453,7 @@ def create_app(config_path: str) -> FastAPI:
         return response
 
     register_public_routes(app)
+    app.include_router(admin_router)
     return app
 
 
