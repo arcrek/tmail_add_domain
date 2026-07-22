@@ -42,14 +42,18 @@ else
     ssh "$SERVER" "install -m 600 '$STAGE_DIR/config.json.upload' '$STAGE_DIR/config.json' && rm -f '$STAGE_DIR/config.json.upload'"
 fi
 
+echo "==> Securing staged release"
+ssh "$SERVER" "chown -R root:root '$STAGE_DIR' && find '$STAGE_DIR' -type d -exec chmod 755 {} + && find '$STAGE_DIR' -type f ! -path '$STAGE_DIR/config.json' -exec chmod 644 {} + && chmod 755 '$STAGE_DIR/deploy/release.sh' && chmod 600 '$STAGE_DIR/config.json'"
+
 echo "==> Validating staged web config"
 ssh "$SERVER" "cd '$STAGE_DIR' && PYTHONPATH='$STAGE_DIR' python3 -m src.config validate-web '$STAGE_DIR/config.json'"
 
 echo "==> Preparing Python dependencies"
 ssh "$SERVER" "pip3 install -r '$STAGE_DIR/requirements.txt'"
 
-echo "==> Preparing service ownership"
-ssh "$SERVER" "id tmail-policy &>/dev/null || useradd -r -s /sbin/nologin tmail-policy; mkdir -p /var/lib/tmail-policy; chown -R tmail-policy:tmail-policy '$STAGE_DIR' /var/lib/tmail-policy; chmod 600 '$STAGE_DIR/config.json'"
+echo "==> Preparing service data ownership"
+ssh "$SERVER" "id tmail-policy &>/dev/null || useradd -r -s /sbin/nologin tmail-policy"
+ssh "$SERVER" "mkdir -p /var/lib/tmail-policy && chown -R tmail-policy:tmail-policy /var/lib/tmail-policy"
 
 echo "==> Promoting staged release"
 ssh "$SERVER" bash "$STAGE_DIR/deploy/release.sh" "$STAGE_DIR" "$REMOTE_DIR"

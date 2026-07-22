@@ -44,6 +44,15 @@ case "$command" in
 esac
 """)
     command.chmod(0o755)
+
+    chown = tmp_path / "chown"
+    chown.write_text("""#!/usr/bin/env bash
+set -eu
+target=${!#}
+[ -f "$target" ] || exit 43
+printf '%s\n' "$*" >> "$FAKE_SYSTEMD_STATE/chown-log"
+""")
+    chown.chmod(0o755)
     return command, state
 
 
@@ -54,6 +63,7 @@ def _release_tree(tmp_path: Path):
     (stage / "deploy").mkdir(parents=True)
     systemd.mkdir()
     (stage / "version").write_text("new")
+    (stage / "config.json").write_text("secret")
     for unit in UNITS:
         (stage / "deploy" / unit).write_text(f"new {unit}")
     return stage, live, systemd
@@ -68,6 +78,7 @@ def _run_release(stage, live, systemd, command, state):
             "TMAIL_SYSTEMD_DIR": str(systemd),
             "TMAIL_SYSTEMCTL": str(command),
             "FAKE_SYSTEMD_STATE": str(state),
+            "PATH": f"{command.parent}:{os.environ['PATH']}",
         },
     )
 
@@ -143,11 +154,50 @@ def test_success_promotes_release_and_restarts_policy_before_api(tmp_path):
     assert not list(tmp_path.glob(".tmail-policy.backup.*"))
 
 
+def test_release_grants_service_ownership_only_to_promoted_config(tmp_path):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 0, result.stderr
+    assert (state / "chown-log").read_text().splitlines() == [
+        f"-- tmail-policy:tmail-policy {live / 'config.json'}",
+    ]
+    assert stat.S_IMODE((live / "config.json").stat().st_mode) == 0o600
+
+
 @pytest.mark.parametrize("name", ["install.sh", "deploy.sh"])
 def test_deployment_entrypoints_use_tested_release_helper(name):
     script = (ROOT / "deploy" / name).read_text()
     assert "deploy/release.sh" in script
     assert 'bash "$STAGE_DIR/deploy/release.sh" "$STAGE_DIR" "$REMOTE_DIR"' in script
+
+
+@pytest.mark.parametrize("name", ["install.sh", "deploy.sh"])
+def test_staged_root_artifacts_are_not_writable_by_service(name):
+    script = (ROOT / "deploy" / name).read_text()
+    validation = script.index("python3 -m src.config validate-web")
+    promotion = script.index('bash "$STAGE_DIR/deploy/release.sh"')
+
+    root_ownership = script.index("chown -R root:root")
+    directory_modes = script.index("-type d -exec chmod 755")
+    artifact_modes = script.index("-type f ! -path")
+    helper_mode = script.index("chmod 755", artifact_modes)
+    assert root_ownership < validation
+    assert directory_modes < validation
+    assert artifact_modes < validation
+    assert helper_mode < validation
+    assert "config.json" in script[artifact_modes:helper_mode]
+
+    service_owned_stage_lines = [
+        line.strip()
+        for line in script.splitlines()
+        if "chown" in line
+        and "tmail-policy:tmail-policy" in line
+        and "STAGE_DIR" in line
+    ]
+    assert not service_owned_stage_lines
 
 
 @pytest.mark.parametrize("name", ["install.sh", "deploy.sh"])

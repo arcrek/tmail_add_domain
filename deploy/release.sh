@@ -92,6 +92,8 @@ if [ -e "$REMOTE_DIR" ]; then
 fi
 mv "$STAGE_DIR" "$REMOTE_DIR"
 PROMOTED=1
+chown -- tmail-policy:tmail-policy "$REMOTE_DIR/config.json"
+chmod 600 "$REMOTE_DIR/config.json"
 
 "$SYSTEMCTL" daemon-reload
 "$SYSTEMCTL" enable tmail-policy.service tmail-api.service tmail-janitor.timer

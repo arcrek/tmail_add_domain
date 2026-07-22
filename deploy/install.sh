@@ -48,6 +48,13 @@ cp -r frontend/dist/. "$STAGE_DIR/frontend/dist/"
 cp "$POLICY_SERVICE_FILE" "$API_SERVICE_FILE" deploy/tmail-janitor.service \
     deploy/tmail-janitor.timer deploy/accepted_domains deploy/release.sh "$STAGE_DIR/deploy/"
 
+echo "==> Securing staged release"
+chown -R root:root "$STAGE_DIR"
+find "$STAGE_DIR" -type d -exec chmod 755 {} +
+find "$STAGE_DIR" -type f ! -path "$STAGE_DIR/config.json" -exec chmod 644 {} +
+chmod 755 "$STAGE_DIR/deploy/release.sh"
+chmod 600 "$STAGE_DIR/config.json"
+
 echo "==> Validating staged web config"
 (cd "$STAGE_DIR" && PYTHONPATH="$STAGE_DIR" python3 -m src.config validate-web "$STAGE_DIR/config.json")
 
@@ -57,10 +64,9 @@ pip3 install -r "$STAGE_DIR/requirements.txt"
 echo "==> Creating service user (idempotent)"
 id tmail-policy &>/dev/null || useradd -r -s /sbin/nologin tmail-policy
 
-echo "==> Preparing service ownership"
+echo "==> Preparing service data ownership"
 mkdir -p /var/lib/tmail-policy
-chown -R tmail-policy:tmail-policy "$STAGE_DIR" /var/lib/tmail-policy
-chmod 600 "$STAGE_DIR/config.json"
+chown -R tmail-policy:tmail-policy /var/lib/tmail-policy
 
 # ── Postfix setup ──────────────────────────────────────────────────────────────
 
