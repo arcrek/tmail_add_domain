@@ -1,2 +1,4 @@
 dnspython>=2.3.0
 httpx>=0.24.0
+fastapi>=0.110,<1
+uvicorn>=0.29,<1
