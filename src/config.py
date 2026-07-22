@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
 import threading
 from dataclasses import asdict, dataclass
 
@@ -23,6 +24,35 @@ class Config:
     state_db: str = "/var/lib/tmail-policy/state.db"
     frontend_dist: str = "/opt/tmail-policy/frontend/dist"
     mail_account_id: str = ""
+
+
+_TOKEN_COMMAND = "python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
+
+
+def validate_web_config(config: Config) -> Config:
+    secret = config.api_token_secret
+    password = config.admin_password
+    token_invalid = (
+        not isinstance(secret, str)
+        or len(secret.strip()) < 32
+        or secret.strip().lower().startswith("replace-with")
+    )
+    password_invalid = (
+        not isinstance(password, str)
+        or not password.strip()
+        or password.strip().lower().startswith("replace-with")
+    )
+    errors = []
+    if token_invalid:
+        errors.append(
+            "api_token_secret must contain at least 32 non-whitespace characters and not use a "
+            f"placeholder. Generate one with: {_TOKEN_COMMAND}"
+        )
+    if password_invalid:
+        errors.append("admin_password must not be empty or use a placeholder")
+    if errors:
+        raise ValueError("; ".join(errors))
+    return config
 
 
 def _config_from_dict(d: dict) -> Config:
@@ -89,3 +119,20 @@ class ConfigStore:
             self._config = updated
             self._mtime = os.path.getmtime(self.path)
             return updated
+
+
+def _main(args: list[str] | None = None) -> int:
+    args = sys.argv[1:] if args is None else args
+    if len(args) != 2 or args[0] != "validate-web":
+        print("Usage: python3 -m src.config validate-web CONFIG", file=sys.stderr)
+        return 2
+    try:
+        validate_web_config(load_config(args[1]))
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

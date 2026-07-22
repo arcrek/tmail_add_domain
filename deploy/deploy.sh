@@ -2,71 +2,107 @@
 set -euo pipefail
 
 SERVER="${1:?Usage: ./deploy.sh user@hostname}"
-[ -f config.json ] || { echo "ERROR: config.json not found. Copy config.example.json to config.json and fill in your API token first."; exit 1; }
 REMOTE_DIR="/opt/tmail-policy"
+STAGE_DIR=""
+
+[ -f config.json ] || { echo "ERROR: config.json not found. Copy config.example.json to config.json and configure it first."; exit 1; }
+
+cleanup() {
+    status=$?
+    trap - EXIT
+    if [[ "$STAGE_DIR" =~ ^/opt/\.tmail-policy\.stage\.[A-Za-z0-9]+$ ]]; then
+        ssh "$SERVER" "rm -rf -- '$STAGE_DIR'" || true
+    fi
+    exit "$status"
+}
+trap cleanup EXIT
 
 echo "==> Building frontend"
 npm --prefix frontend ci
 npm --prefix frontend run build
 
-echo "==> Installing Python dependencies on remote"
-scp requirements.txt "$SERVER:/tmp/tmail-requirements.txt"
-ssh "$SERVER" "pip3 install -r /tmp/tmail-requirements.txt"
+echo "==> Creating secure remote stage"
+STAGE_DIR=$(ssh "$SERVER" "mktemp -d /opt/.tmail-policy.stage.XXXXXX")
+[[ "$STAGE_DIR" =~ ^/opt/\.tmail-policy\.stage\.[A-Za-z0-9]+$ ]] || { echo "ERROR: invalid remote stage path"; exit 1; }
+ssh "$SERVER" "mkdir -p '$STAGE_DIR/src' '$STAGE_DIR/frontend/dist' '$STAGE_DIR/deploy'"
 
-echo "==> Creating remote directories"
-ssh "$SERVER" "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/frontend /var/lib/tmail-policy"
+echo "==> Uploading staged release"
+scp requirements.txt "$SERVER:$STAGE_DIR/requirements.txt"
+scp src/*.py "$SERVER:$STAGE_DIR/src/"
+scp -r frontend/dist/. "$SERVER:$STAGE_DIR/frontend/dist/"
+scp deploy/tmail-policy.service deploy/tmail-api.service deploy/tmail-janitor.service \
+    deploy/tmail-janitor.timer "$SERVER:$STAGE_DIR/deploy/"
 
-echo "==> Uploading source and frontend"
-scp src/*.py "$SERVER:$REMOTE_DIR/src/"
-scp -r frontend/dist "$SERVER:$REMOTE_DIR/frontend/"
-
-if ssh "$SERVER" "test -f $REMOTE_DIR/config.json"; then
-    echo "==> Preserving existing production config"
+if ssh "$SERVER" "test -f '$REMOTE_DIR/config.json'"; then
+    echo "==> Staging existing production config"
+    ssh "$SERVER" "install -m 600 '$REMOTE_DIR/config.json' '$STAGE_DIR/config.json'"
 else
-    echo "==> Uploading initial config"
-    scp config.json "$SERVER:$REMOTE_DIR/config.json"
+    echo "==> Staging initial config"
+    scp config.json "$SERVER:$STAGE_DIR/config.json.upload"
+    ssh "$SERVER" "install -m 600 '$STAGE_DIR/config.json.upload' '$STAGE_DIR/config.json' && rm -f '$STAGE_DIR/config.json.upload'"
 fi
 
-CONFIG_ERRORS=$(ssh "$SERVER" python3 - "$REMOTE_DIR/config.json" <<'PY'
-import json
-import sys
+echo "==> Validating staged web config"
+ssh "$SERVER" "cd '$STAGE_DIR' && PYTHONPATH='$STAGE_DIR' python3 -m src.config validate-web '$STAGE_DIR/config.json'"
 
-with open(sys.argv[1]) as handle:
-    config = json.load(handle)
-secret = config.get("api_token_secret")
-password = config.get("admin_password")
-if not isinstance(secret, str) or len(secret) < 32:
-    print("api_token_secret")
-if not isinstance(password, str) or not password.strip():
-    print("admin_password")
-PY
-)
-if [ -n "$CONFIG_ERRORS" ]; then
-    if [[ "$CONFIG_ERRORS" == *api_token_secret* ]]; then
-        echo "ERROR: api_token_secret must contain at least 32 characters. Generate one with:"
-        echo "       python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
+echo "==> Preparing Python dependencies"
+ssh "$SERVER" "pip3 install -r '$STAGE_DIR/requirements.txt'"
+
+echo "==> Preparing service ownership"
+ssh "$SERVER" "id tmail-policy &>/dev/null || useradd -r -s /sbin/nologin tmail-policy; mkdir -p /var/lib/tmail-policy; chown -R tmail-policy:tmail-policy '$STAGE_DIR' /var/lib/tmail-policy; chmod 600 '$STAGE_DIR/config.json'"
+
+echo "==> Promoting staged release"
+ssh "$SERVER" bash -s -- "$STAGE_DIR" "$REMOTE_DIR" <<'REMOTE'
+set -euo pipefail
+
+STAGE_DIR=$1
+REMOTE_DIR=$2
+BACKUP_DIR=$(mktemp -d /opt/.tmail-policy.backup.XXXXXX)
+PROMOTED=0
+
+cleanup() {
+    status=$?
+    trap - EXIT
+    set +e
+    if [ "$status" -ne 0 ] && [ "$PROMOTED" -eq 1 ]; then
+        mv "$REMOTE_DIR" "$BACKUP_DIR/failed"
+        if [ -e "$BACKUP_DIR/release" ]; then
+            mv "$BACKUP_DIR/release" "$REMOTE_DIR"
+            systemctl daemon-reload
+            systemctl restart tmail-policy
+            systemctl restart tmail-api
+        fi
     fi
-    if [[ "$CONFIG_ERRORS" == *admin_password* ]]; then
-        echo "ERROR: admin_password must not be empty."
-    fi
+    [[ "$BACKUP_DIR" == /opt/.tmail-policy.backup.* ]] && rm -rf -- "$BACKUP_DIR"
+    exit "$status"
+}
+trap cleanup EXIT
+
+cp "$STAGE_DIR/deploy/tmail-policy.service" /etc/systemd/system/tmail-policy.service
+cp "$STAGE_DIR/deploy/tmail-api.service" /etc/systemd/system/tmail-api.service
+cp "$STAGE_DIR/deploy/tmail-janitor.service" /etc/systemd/system/tmail-janitor.service
+cp "$STAGE_DIR/deploy/tmail-janitor.timer" /etc/systemd/system/tmail-janitor.timer
+
+if [ -e "$REMOTE_DIR" ]; then
+    mv "$REMOTE_DIR" "$BACKUP_DIR/release"
+fi
+if ! mv "$STAGE_DIR" "$REMOTE_DIR"; then
+    [ ! -e "$BACKUP_DIR/release" ] || mv "$BACKUP_DIR/release" "$REMOTE_DIR"
     exit 1
 fi
+PROMOTED=1
 
-echo "==> Uploading systemd units"
-scp deploy/tmail-policy.service deploy/tmail-api.service deploy/tmail-janitor.service \
-    deploy/tmail-janitor.timer "$SERVER:/etc/systemd/system/"
+systemctl daemon-reload
+systemctl enable tmail-policy tmail-api tmail-janitor.timer
+systemctl restart tmail-policy
+systemctl restart tmail-api
+systemctl start tmail-janitor.timer
+systemctl status tmail-policy tmail-api --no-pager -l
 
-echo "==> Creating service user (idempotent)"
-ssh "$SERVER" "id tmail-policy &>/dev/null || useradd -r -s /sbin/nologin tmail-policy"
+PROMOTED=0
+rm -rf -- "$BACKUP_DIR"
+BACKUP_DIR=""
+REMOTE
 
-echo "==> Setting permissions"
-ssh "$SERVER" "
-  chown -R tmail-policy:tmail-policy $REMOTE_DIR /var/lib/tmail-policy
-  [ -f $REMOTE_DIR/config.json ] && chmod 600 $REMOTE_DIR/config.json || true
-"
-
-echo "==> Enabling and restarting services"
-ssh "$SERVER" "systemctl daemon-reload && systemctl enable tmail-policy tmail-api && systemctl restart tmail-policy && systemctl restart tmail-api && systemctl enable --now tmail-janitor.timer"
-
-echo "==> Status"
-ssh "$SERVER" "systemctl status tmail-policy tmail-api --no-pager -l"
+STAGE_DIR=""
+echo "==> Deployment complete"

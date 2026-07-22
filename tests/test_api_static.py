@@ -59,8 +59,12 @@ def test_spa_serves_home_admin_and_address_routes(client, frontend_dist):
 def test_api_and_docs_are_not_shadowed_by_spa(client):
     assert client.get("/domains").headers["content-type"].startswith("application/ld+json")
     assert client.get("/docs").status_code == 200
+    assert client.get("/redoc").status_code == 200
     assert client.get("/openapi.json").status_code == 200
-    assert client.get("/token").status_code != 200
+    mismatch = client.get("/token")
+    assert mismatch.status_code == 405
+    assert '<div id="app"></div>' not in mismatch.text
+    assert client.get("/admin/api/settings").status_code == 401
     assert '<div id="app"></div>' not in client.get("/not-an-address").text
     assert client.get("/box@other.example").status_code == 404
 
@@ -93,3 +97,19 @@ def test_main_uses_environment_config_and_api_bind(config_path, monkeypatch):
     assert called["host"] == "127.0.0.2"
     assert called["port"] == 8765
     assert called["app"].state.config_store.path == str(config_path)
+
+
+@pytest.mark.parametrize(("secret", "password", "field"), [
+    ("replace-with-32-or-more-random-characters", "admin-secret", "api_token_secret"),
+    (" " + "s" * 31 + " ", "admin-secret", "api_token_secret"),
+    ("s" * 32, "   ", "admin_password"),
+    ("s" * 32, "replace-with-a-strong-admin-password", "admin_password"),
+])
+def test_api_startup_rejects_weak_or_placeholder_credentials(
+    config_path, secret, password, field
+):
+    config = json.loads(config_path.read_text())
+    config.update(api_token_secret=secret, admin_password=password)
+    config_path.write_text(json.dumps(config))
+    with pytest.raises(ValueError, match=field):
+        create_app(str(config_path))

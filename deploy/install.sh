@@ -7,89 +7,77 @@ set -euo pipefail
 REMOTE_DIR="/opt/tmail-policy"
 POLICY_SERVICE_FILE="deploy/tmail-policy.service"
 API_SERVICE_FILE="deploy/tmail-api.service"
+STAGE_DIR=""
+BACKUP_DIR=""
+MAIN_CF_TMP=""
+PROMOTED=0
+
+cleanup() {
+    status=$?
+    trap - EXIT
+    set +e
+    if [ "$status" -ne 0 ] && [ "$PROMOTED" -eq 1 ]; then
+        mv "$REMOTE_DIR" "$BACKUP_DIR/failed"
+        if [ -e "$BACKUP_DIR/release" ]; then
+            mv "$BACKUP_DIR/release" "$REMOTE_DIR"
+            systemctl daemon-reload
+            systemctl restart tmail-policy
+            systemctl restart tmail-api
+        fi
+    fi
+    [[ "$MAIN_CF_TMP" == /etc/postfix/.main.cf.dedup.* ]] && rm -f -- "$MAIN_CF_TMP"
+    [[ "$STAGE_DIR" == /opt/.tmail-policy.stage.* ]] && rm -rf -- "$STAGE_DIR"
+    [[ "$BACKUP_DIR" == /opt/.tmail-policy.backup.* ]] && rm -rf -- "$BACKUP_DIR"
+    exit "$status"
+}
+trap cleanup EXIT
 
 [ "$(id -u)" -eq 0 ] || { echo "ERROR: must be run as root (use sudo)"; exit 1; }
 [ -f config.json ] || { echo "ERROR: config.json not found. Copy config.example.json to config.json and fill in your API token first."; exit 1; }
 [ -f "$POLICY_SERVICE_FILE" ] || { echo "ERROR: run from project root (deploy/tmail-policy.service not found)"; exit 1; }
 [ -f "$API_SERVICE_FILE" ] || { echo "ERROR: deploy/tmail-api.service not found"; exit 1; }
 
-echo "==> Installing Python dependencies"
-pip3 install -r requirements.txt
-
 echo "==> Building frontend"
 npm --prefix frontend ci
 npm --prefix frontend run build
 
-echo "==> Creating directories"
-mkdir -p "$REMOTE_DIR/src" "$REMOTE_DIR/frontend/dist" /var/lib/tmail-policy
-
-echo "==> Copying source files"
-cp src/*.py "$REMOTE_DIR/src/"
-cp -r frontend/dist/. "$REMOTE_DIR/frontend/dist/"
+echo "==> Creating secure release stage"
+STAGE_DIR=$(mktemp -d /opt/.tmail-policy.stage.XXXXXX)
+mkdir -p "$STAGE_DIR/src" "$STAGE_DIR/frontend/dist" "$STAGE_DIR/deploy"
 
 if [ -f "$REMOTE_DIR/config.json" ]; then
-    echo "==> Preserving existing production config"
+    echo "==> Staging existing production config"
+    install -m 600 "$REMOTE_DIR/config.json" "$STAGE_DIR/config.json"
 else
-    echo "==> Installing config"
-    cp config.json "$REMOTE_DIR/config.json"
+    echo "==> Staging initial config"
+    install -m 600 config.json "$STAGE_DIR/config.json"
 fi
 
-CONFIG_ERRORS=$(python3 - "$REMOTE_DIR/config.json" <<'PY'
-import json
-import sys
+echo "==> Copying staged release"
+cp requirements.txt "$STAGE_DIR/requirements.txt"
+cp src/*.py "$STAGE_DIR/src/"
+cp -r frontend/dist/. "$STAGE_DIR/frontend/dist/"
+cp "$POLICY_SERVICE_FILE" "$API_SERVICE_FILE" deploy/tmail-janitor.service \
+    deploy/tmail-janitor.timer deploy/accepted_domains "$STAGE_DIR/deploy/"
 
-with open(sys.argv[1]) as handle:
-    config = json.load(handle)
-secret = config.get("api_token_secret")
-password = config.get("admin_password")
-if not isinstance(secret, str) or len(secret) < 32:
-    print("api_token_secret")
-if not isinstance(password, str) or not password.strip():
-    print("admin_password")
-PY
-)
-if [ -n "$CONFIG_ERRORS" ]; then
-    if [[ "$CONFIG_ERRORS" == *api_token_secret* ]]; then
-        echo "ERROR: api_token_secret must contain at least 32 characters. Generate one with:"
-        echo "       python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
-    fi
-    if [[ "$CONFIG_ERRORS" == *admin_password* ]]; then
-        echo "ERROR: admin_password must not be empty."
-    fi
-    exit 1
-fi
+echo "==> Validating staged web config"
+(cd "$STAGE_DIR" && PYTHONPATH="$STAGE_DIR" python3 -m src.config validate-web "$STAGE_DIR/config.json")
 
-echo "==> Installing systemd units"
-cp "$POLICY_SERVICE_FILE" /etc/systemd/system/tmail-policy.service
-cp "$API_SERVICE_FILE" /etc/systemd/system/tmail-api.service
-cp deploy/tmail-janitor.service /etc/systemd/system/tmail-janitor.service
-cp deploy/tmail-janitor.timer /etc/systemd/system/tmail-janitor.timer
+echo "==> Preparing Python dependencies"
+pip3 install -r "$STAGE_DIR/requirements.txt"
 
 echo "==> Creating service user (idempotent)"
 id tmail-policy &>/dev/null || useradd -r -s /sbin/nologin tmail-policy
 
-echo "==> Setting permissions"
-chown -R tmail-policy:tmail-policy "$REMOTE_DIR" /var/lib/tmail-policy
-chmod 600 "$REMOTE_DIR/config.json"
-
-echo "==> Enabling and starting services"
-systemctl daemon-reload
-systemctl enable tmail-policy tmail-api
-systemctl restart tmail-policy
-systemctl restart tmail-api
-
-echo "==> Enabling email janitor timer (runs daily at 03:00)"
-systemctl enable tmail-janitor.timer
-systemctl start tmail-janitor.timer
-
-echo "==> Status"
-systemctl status tmail-policy --no-pager -l
-systemctl status tmail-api --no-pager -l
+echo "==> Preparing service ownership"
+mkdir -p /var/lib/tmail-policy
+chown -R tmail-policy:tmail-policy "$STAGE_DIR" /var/lib/tmail-policy
+chmod 600 "$STAGE_DIR/config.json"
 
 # ── Postfix setup ──────────────────────────────────────────────────────────────
 
 echo "==> Installing Postfix and PCRE support"
-POSTFIX_HOSTNAME=$(python3 -c "import json; print(json.load(open('config.json'))['mx_hostname'])")
+POSTFIX_HOSTNAME=$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['mx_hostname'])" "$STAGE_DIR/config.json")
 POSTFIX_DOMAIN=$(echo "$POSTFIX_HOSTNAME" | cut -d. -f2-)
 
 # Write /etc/mailname before apt runs so the post-install script uses the right hostname
@@ -106,13 +94,19 @@ echo "postfix postfix/mailname string ${POSTFIX_HOSTNAME}" | debconf-set-selecti
 DEBIAN_FRONTEND=noninteractive apt-get install -y postfix postfix-pcre
 
 echo "==> Backing up /etc/postfix/main.cf"
-cp /etc/postfix/main.cf /etc/postfix/main.cf.bak
+POSTFIX_BACKUP=$(mktemp /etc/postfix/.main.cf.backup.XXXXXX)
+cp --preserve=mode,ownership,timestamps /etc/postfix/main.cf "$POSTFIX_BACKUP"
+echo "    Saved to $POSTFIX_BACKUP"
 
 echo "==> Installing accepted_domains PCRE map"
-cp deploy/accepted_domains /etc/postfix/accepted_domains
+cp "$STAGE_DIR/deploy/accepted_domains" /etc/postfix/accepted_domains
 
 echo "==> Cleaning up any duplicate keys from previous installs"
-awk '!seen[$1]++' /etc/postfix/main.cf > /tmp/main.cf.dedup && mv /tmp/main.cf.dedup /etc/postfix/main.cf
+MAIN_CF_TMP=$(mktemp /etc/postfix/.main.cf.dedup.XXXXXX)
+awk '!seen[$1]++' /etc/postfix/main.cf > "$MAIN_CF_TMP"
+chmod 644 "$MAIN_CF_TMP"
+mv "$MAIN_CF_TMP" /etc/postfix/main.cf
+MAIN_CF_TMP=""
 
 echo "==> Applying Postfix config (postconf -e, no duplicates)"
 postconf -e \
@@ -159,6 +153,36 @@ fi
 echo ""
 echo "==> Verifying port ownership"
 ss -tlnp | grep -E ':25|:2525' || true
+
+echo "==> Installing staged systemd units"
+cp "$STAGE_DIR/deploy/tmail-policy.service" /etc/systemd/system/tmail-policy.service
+cp "$STAGE_DIR/deploy/tmail-api.service" /etc/systemd/system/tmail-api.service
+cp "$STAGE_DIR/deploy/tmail-janitor.service" /etc/systemd/system/tmail-janitor.service
+cp "$STAGE_DIR/deploy/tmail-janitor.timer" /etc/systemd/system/tmail-janitor.timer
+
+echo "==> Promoting staged release"
+BACKUP_DIR=$(mktemp -d /opt/.tmail-policy.backup.XXXXXX)
+if [ -e "$REMOTE_DIR" ]; then
+    mv "$REMOTE_DIR" "$BACKUP_DIR/release"
+fi
+if ! mv "$STAGE_DIR" "$REMOTE_DIR"; then
+    [ ! -e "$BACKUP_DIR/release" ] || mv "$BACKUP_DIR/release" "$REMOTE_DIR"
+    exit 1
+fi
+STAGE_DIR=""
+PROMOTED=1
+
+echo "==> Enabling and starting services"
+systemctl daemon-reload
+systemctl enable tmail-policy tmail-api tmail-janitor.timer
+systemctl restart tmail-policy
+systemctl restart tmail-api
+systemctl start tmail-janitor.timer
+systemctl status tmail-policy tmail-api --no-pager -l
+
+PROMOTED=0
+rm -rf -- "$BACKUP_DIR"
+BACKUP_DIR=""
 
 echo ""
 echo "==> Done. Postfix on :25, Stalwart receiving on :2525."

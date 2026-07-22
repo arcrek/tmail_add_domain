@@ -2,7 +2,22 @@ from __future__ import annotations
 import json
 import stat
 import pytest
+from src import config as config_module
 from src.config import Config, ConfigStore, load_config
+
+
+def _web_config(secret: str, password: str) -> Config:
+    return Config(
+        jmap_url="https://example.com/jmap/",
+        jmap_token="token",
+        mx_hostname="mail.example.com",
+        catchall_address="admin@example.com",
+        listen_addr="127.0.0.1",
+        listen_port=10030,
+        cache_file="/tmp/domains.json",
+        api_token_secret=secret,
+        admin_password=password,
+    )
 
 def test_load_valid_config(tmp_path):
     data = {
@@ -96,3 +111,21 @@ def test_config_store_update_preserves_config_mode(tmp_path):
     path.chmod(0o600)
     ConfigStore(str(path)).update({"jmap_url": "https://new.example/jmap/"})
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize(("secret", "password", "field"), [
+    (" " + "a" * 31 + " ", "secret", "api_token_secret"),
+    ("replace-with-my-real-random-string", "secret", "api_token_secret"),
+    ("a" * 32, "   ", "admin_password"),
+    ("a" * 32, "replace-with-a-strong-admin-password", "admin_password"),
+])
+def test_web_config_rejects_weak_or_placeholder_credentials(secret, password, field):
+    with pytest.raises(ValueError, match=field) as exc:
+        config_module.validate_web_config(_web_config(secret, password))
+    if field == "api_token_secret":
+        assert "python3 -c 'import secrets; print(secrets.token_urlsafe(32))'" in str(exc.value)
+
+
+def test_web_config_accepts_32_stripped_token_characters():
+    config = _web_config(" " + "a" * 32 + " ", "secret")
+    assert config_module.validate_web_config(config) is config

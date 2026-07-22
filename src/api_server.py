@@ -36,7 +36,7 @@ from src.api_models import (
     TokenResponse,
 )
 from src.api_state import StateStore
-from src.config import Config, ConfigStore
+from src.config import Config, ConfigStore, validate_web_config
 from src.domain_cache import DomainCache
 from src.jmap_client import JmapClient
 
@@ -47,6 +47,7 @@ _SPA_RESERVED = {
     "accounts", "admin", "api", "assets", "docs", "domains", "favicon.ico", "me",
     "messages", "openapi.json", "redoc", "settings", "site", "sources", "token",
 }
+_POST_ONLY_ROUTES = {"accounts", "token"}
 _ERROR_RESPONSES = {
     401: {"model": HydraError},
     404: {"model": HydraError},
@@ -454,9 +455,7 @@ def register_public_routes(app: FastAPI) -> None:
 
 def create_app(config_path: str) -> FastAPI:
     config_store = ConfigStore(config_path)
-    cfg = config_store.get()
-    if len(cfg.api_token_secret) < 32 or not cfg.admin_password:
-        raise ValueError("api_token_secret and admin_password must be configured")
+    cfg = validate_web_config(config_store.get())
     state = StateStore(cfg.state_db)
     signer = AddressToken(cfg.api_token_secret)
     app = FastAPI(title="Temporary Mail API", docs_url="/docs", redoc_url="/redoc")
@@ -506,6 +505,8 @@ def create_app(config_path: str) -> FastAPI:
 
     @app.get("/{address}", include_in_schema=False)
     def spa_address(address: str, request: Request):
+        if address in _POST_ONLY_ROUTES:
+            raise HTTPException(405, "Method Not Allowed")
         try:
             if address in _SPA_RESERVED:
                 raise AddressValidationError("Reserved route")

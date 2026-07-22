@@ -18,7 +18,7 @@ Copy `config.example.json` to `config.json`. Generate the API signing secret wit
 python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 ```
 
-Set `admin_password` to a strong, non-empty password. The API refuses to start unless the signing secret contains at least 32 characters and the admin password is present. For local operation, also set `frontend_dist` to `frontend/dist` and use writable local paths for `cache_file` and `state_db`.
+Set `admin_password` to a strong, non-empty password. The API refuses to start unless the stripped signing secret contains at least 32 characters, the admin password is nonblank, and neither value is a shipped `replace-with...` placeholder. For local operation, also set `frontend_dist` to `frontend/dist` and use writable local paths for `cache_file` and `state_db`.
 
 The main web settings are:
 
@@ -83,7 +83,7 @@ For a later remote deployment:
 ./deploy/deploy.sh root@example-host
 ```
 
-Both scripts build the frontend, install all Python modules and systemd units, preserve an existing production config, set service ownership, and restart `tmail-api` after `tmail-policy`.
+Both scripts build and validate a secure staged release, preserve an existing production config at mode `0600`, promote only after dependency preparation succeeds, set service ownership, and restart `tmail-api` after `tmail-policy`.
 
 They do not configure TLS or modify an existing reverse proxy. Put nginx, Caddy, Apache, or another proxy in front of `127.0.0.1:8000`, serve the public site only over HTTPS, and forward the original host and client address. HTTPS is required because the administrator session cookie is `Secure`.
 
@@ -96,6 +96,8 @@ journalctl -u tmail-api -f
 ```
 
 ## Web and API routes
+
+Unlike Mail.tm, this service intentionally has no account/password registration or login. `POST /accounts` is stateless address-validation compatibility and stores no account; `POST /token` accepts only an active address and returns its scoped bearer token.
 
 - `/` opens the address picker and inbox app.
 - `/admin` opens the administrator console.
