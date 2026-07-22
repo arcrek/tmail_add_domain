@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
 import App from '../App.vue'
 import AddressPanel from '../components/AddressPanel.vue'
@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   domains: vi.fn(),
   token: vi.fn(),
 }))
+
+enableAutoUnmount(afterEach)
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
@@ -32,6 +34,8 @@ describe('address flow', () => {
     mocks.token.mockReset().mockResolvedValue({ id: 'account-id', token: 'signed-token' })
   })
 
+  afterEach(() => vi.restoreAllMocks())
+
   it('hands a direct address link into the inbox without another action', async () => {
     history.replaceState({}, '', '/Box%40Example.com')
     const wrapper = mount(App)
@@ -43,6 +47,20 @@ describe('address flow', () => {
     expect(JSON.parse(localStorage.getItem('tmail.addresses') ?? '[]')).toEqual([
       { address: 'box@example.com', token: 'signed-token' },
     ])
+  })
+
+  it('opens a tokenized inbox when browser storage denies writes', async () => {
+    history.replaceState({}, '', '/box@example.com')
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage denied', 'SecurityError')
+    })
+
+    const wrapper = mount(App)
+    await flushPromises()
+
+    expect(mocks.token).toHaveBeenCalledWith('box@example.com')
+    expect(wrapper.text()).toContain('Inbox ready')
+    expect(wrapper.text()).toContain('box@example.com')
   })
 
   it('creates a custom address with an active domain', async () => {
@@ -72,5 +90,59 @@ describe('address flow', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Domain list unavailable')
     expect(wrapper.text()).toContain('Retry')
+  })
+
+  it('keeps Back and Forward history aligned with the rendered inbox', async () => {
+    const pushState = vi.spyOn(history, 'pushState')
+    const travel = async (move: () => void) => {
+      const moved = new Promise<void>((resolve) => {
+        window.addEventListener('popstate', () => resolve(), { once: true })
+      })
+      move()
+      await moved
+      await flushPromises()
+    }
+    const wrapper = mount(App)
+    await flushPromises()
+
+    await wrapper.get('#local-part').setValue('alpha')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(location.pathname).toBe('/alpha%40example.com')
+
+    await wrapper.get('.primary-button').trigger('click')
+    await flushPromises()
+    await wrapper.get('#local-part').setValue('beta')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(location.pathname).toBe('/beta%40example.com')
+
+    await travel(() => history.back())
+    expect(location.pathname).toBe('/')
+    expect(wrapper.text()).toContain('Receive mail. Keep your address.')
+
+    await travel(() => history.back())
+    expect(location.pathname).toBe('/alpha%40example.com')
+    expect(wrapper.text()).toContain('alpha@example.com')
+
+    await travel(() => history.forward())
+    expect(location.pathname).toBe('/')
+
+    await travel(() => history.forward())
+    expect(location.pathname).toBe('/beta%40example.com')
+    expect(wrapper.text()).toContain('beta@example.com')
+    expect(pushState).toHaveBeenCalledTimes(3)
+  })
+
+  it('removes its history listener when the app unmounts', async () => {
+    const add = vi.spyOn(window, 'addEventListener')
+    const remove = vi.spyOn(window, 'removeEventListener')
+    const wrapper = mount(App)
+    await flushPromises()
+    const handler = add.mock.calls.find(([type]) => type === 'popstate')?.[1]
+
+    expect(handler).toEqual(expect.any(Function))
+    wrapper.unmount()
+    expect(remove).toHaveBeenCalledWith('popstate', handler)
   })
 })

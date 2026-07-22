@@ -16,5 +16,10 @@ describe('parseRoute', () => {
   it('rejects malformed and nested paths', () => {
     expect(parseRoute('/not-an-address')).toEqual({ name: 'home' })
     expect(parseRoute('/a/b@example.com')).toEqual({ name: 'home' })
+    expect(parseRoute('/a%2Fb@example.com')).toEqual({ name: 'home' })
+    expect(parseRoute('/a%5Cb@example.com')).toEqual({ name: 'home' })
+    expect(parseRoute('//box@example.com')).toEqual({ name: 'home' })
+    expect(parseRoute('/box@example.com/')).toEqual({ name: 'home' })
+    expect(parseRoute('/box%ZZ@example.com')).toEqual({ name: 'home' })
   })
 })

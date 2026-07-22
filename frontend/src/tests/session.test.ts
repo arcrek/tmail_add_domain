@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   activeAddress,
   loadSessions,
@@ -11,6 +11,7 @@ import {
 
 describe('address sessions', () => {
   beforeEach(() => localStorage.clear())
+  afterEach(() => vi.restoreAllMocks())
 
   it('returns no sessions for invalid stored JSON', () => {
     localStorage.setItem('tmail.addresses', '{invalid')
@@ -33,5 +34,15 @@ describe('address sessions', () => {
       { address: 'two@example.com', token: 'two' },
     ])
     expect(activeAddress()).toBe('two@example.com')
+  })
+
+  it('returns the in-memory session list when browser storage denies writes', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError')
+    })
+
+    expect(saveSession({ address: 'box@example.com', token: 'signed' })).toEqual([
+      { address: 'box@example.com', token: 'signed' },
+    ])
   })
 })

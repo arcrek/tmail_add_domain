@@ -15,13 +15,15 @@ const RESERVED = new Set([
 ])
 
 export function parseRoute(pathname: string): AppRoute {
-  const segments = pathname.split('/').filter(Boolean)
-  if (segments[0] === 'admin') return { name: 'admin' }
-  if (segments[0] && RESERVED.has(segments[0])) return { name: 'reserved' }
-  if (segments.length !== 1) return { name: 'home' }
+  const nextSlash = pathname.indexOf('/', 1)
+  const firstSegment = pathname.slice(1, nextSlash === -1 ? undefined : nextSlash)
+  if (firstSegment === 'admin') return { name: 'admin' }
+  if (RESERVED.has(firstSegment)) return { name: 'reserved' }
+  if (!pathname.startsWith('/') || pathname.length === 1 || nextSlash !== -1) return { name: 'home' }
 
   try {
-    const address = decodeURIComponent(segments[0]!).toLowerCase()
+    const address = decodeURIComponent(firstSegment).toLowerCase()
+    if (/[\\/]/.test(address)) return { name: 'home' }
     const [local, domain, extra] = address.split('@')
     return local && domain && extra === undefined ? { name: 'address', address } : { name: 'home' }
   } catch {

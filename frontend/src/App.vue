@@ -1,42 +1,74 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import AddressPanel from './components/AddressPanel.vue'
 import { ApiError, api } from './api'
 import { parseRoute } from './route'
-import { saveSession } from './session'
+import { loadSessions, saveSession } from './session'
 import type { AddressSession } from './types'
 
 type View = 'address' | 'inbox' | 'admin'
 
-const route = parseRoute(window.location.pathname)
-const view = ref<View>(route.name === 'admin' ? 'admin' : 'address')
+const initialRoute = parseRoute(window.location.pathname)
+const view = ref<View>(initialRoute.name === 'admin' ? 'admin' : 'address')
 const current = ref<AddressSession | null>(null)
-const loading = ref(route.name === 'address')
+const loading = ref(initialRoute.name === 'address')
 const error = ref('')
 const copied = ref(false)
+let navigationVersion = 0
 
 function openInbox(session: AddressSession, updatePath = true): void {
   current.value = session
   saveSession(session)
   view.value = 'inbox'
-  if (updatePath) history.pushState({}, '', `/${encodeURIComponent(session.address)}`)
+  const path = `/${encodeURIComponent(session.address)}`
+  if (updatePath && location.pathname !== path) history.pushState({}, '', path)
 }
 
-async function handoff(address: string): Promise<void> {
-  loading.value = true
+function openCreatedInbox(session: AddressSession): void {
+  navigationVersion += 1
+  openInbox(session)
+}
+
+async function reconcileRoute(): Promise<void> {
+  const version = ++navigationVersion
+  const route = parseRoute(window.location.pathname)
+  current.value = null
   error.value = ''
-  try {
-    const response = await api.token(address)
-    openInbox({ address, token: response.token }, false)
-  } catch (cause) {
-    error.value = cause instanceof ApiError ? cause.message : 'The mail service is unavailable. Try again.'
+  copied.value = false
+  loading.value = false
+
+  if (route.name === 'admin') {
+    view.value = 'admin'
+    return
+  }
+  if (route.name !== 'address') {
     view.value = 'address'
+    return
+  }
+
+  const remembered = loadSessions().find((session) => session.address === route.address)
+  if (remembered) {
+    openInbox(remembered, false)
+    return
+  }
+
+  view.value = 'address'
+  loading.value = true
+  try {
+    const response = await api.token(route.address)
+    if (version === navigationVersion) openInbox({ address: route.address, token: response.token }, false)
+  } catch (cause) {
+    if (version === navigationVersion) {
+      error.value = cause instanceof ApiError ? cause.message : 'The mail service is unavailable. Try again.'
+      view.value = 'address'
+    }
   } finally {
-    loading.value = false
+    if (version === navigationVersion) loading.value = false
   }
 }
 
 function newAddress(): void {
+  navigationVersion += 1
   current.value = null
   error.value = ''
   view.value = 'address'
@@ -53,8 +85,18 @@ async function copyCurrent(): Promise<void> {
   }
 }
 
+function handlePopState(): void {
+  void reconcileRoute()
+}
+
 onMounted(() => {
-  if (route.name === 'address') void handoff(route.address)
+  window.addEventListener('popstate', handlePopState)
+  void reconcileRoute()
+})
+
+onBeforeUnmount(() => {
+  navigationVersion += 1
+  window.removeEventListener('popstate', handlePopState)
 })
 </script>
 
@@ -101,7 +143,7 @@ onMounted(() => {
         <span class="sr-only">Opening address</span>
       </section>
 
-      <AddressPanel v-else :initial-error="error" @open="openInbox" />
+      <AddressPanel v-else :initial-error="error" @open="openCreatedInbox" />
     </main>
 
     <footer class="site-footer">
