@@ -232,7 +232,8 @@ def test_attachment_and_source_stream_after_owner_check(client, bearer, fake_jma
     attachment = client.get("/messages/m1/attachments/attachment-1", headers=bearer)
     source = client.get("/sources/m1", headers=bearer)
     assert attachment.content == source.content == b"payload"
-    assert attachment.headers["content-type"].startswith("text/plain")
+    assert attachment.headers["content-type"] == "application/octet-stream"
+    assert source.headers["content-type"] == "message/rfc822"
     assert "notes.txt" in attachment.headers["content-disposition"]
     assert "m1.eml" in source.headers["content-disposition"]
     assert fake_jmap.get_message.call_count == 2

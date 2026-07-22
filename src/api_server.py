@@ -405,8 +405,10 @@ def register_public_routes(app: FastAPI) -> None:
         if match is None:
             raise HTTPException(404, "Attachment not found")
         name = str(match.get("name") or "attachment")
-        content, content_type = request.app.state.jmap.download_blob(account_id, blob_id, name)
-        return StreamingResponse(iter([content]), media_type=content_type, headers=_download_headers(name))
+        content, _content_type = request.app.state.jmap.download_blob(account_id, blob_id, name)
+        return StreamingResponse(
+            iter([content]), media_type="application/octet-stream", headers=_download_headers(name)
+        )
 
     @app.get("/sources/{message_id}", response_class=StreamingResponse, responses=_SOURCE_RESPONSES)
     def source(message_id: str, request: Request, address: str = Depends(bearer_address)):
@@ -415,8 +417,8 @@ def register_public_routes(app: FastAPI) -> None:
         if not blob_id:
             raise HTTPException(404, "Message source not found")
         name = f"{message_id}.eml"
-        content, content_type = request.app.state.jmap.download_blob(account_id, str(blob_id), name)
-        return StreamingResponse(iter([content]), media_type=content_type, headers=_download_headers(name))
+        content, _content_type = request.app.state.jmap.download_blob(account_id, str(blob_id), name)
+        return StreamingResponse(iter([content]), media_type="message/rfc822", headers=_download_headers(name))
 
 
 def create_app(config_path: str) -> FastAPI:
