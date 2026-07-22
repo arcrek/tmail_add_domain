@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import sqlite3
 
 from src.api_state import StateStore
 
@@ -18,9 +19,17 @@ def test_admin_session_expires(tmp_path):
     assert store.get_admin_session("hash", now) is None
 
 
-def test_activity_summary_counts_domains(tmp_path):
+def test_activity_summary_counts_domains_today_and_seven_days(tmp_path):
     store = StateStore(str(tmp_path / "state.db"))
+    store.record_event("domain_provisioned", "old.example")
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE activity SET created_at = ? WHERE domain = ?",
+            ((datetime.now(timezone.utc) - timedelta(days=8)).isoformat(), "old.example"),
+        )
     store.record_event("domain_provisioned", "example.com")
     summary = store.activity_summary()
     assert summary["domainsToday"] == 1
+    assert summary["domainsSevenDays"] == 1
     assert summary["recentDomains"][0]["domain"] == "example.com"
+    assert {event["domain"] for event in summary["recentDomains"]} == {"example.com", "old.example"}

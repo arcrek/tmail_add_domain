@@ -427,4 +427,5 @@ def test_dashboard_combines_jmap_and_activity(admin_client, fake_jmap):
     body = admin_client.get("/admin/api/dashboard").json()
     assert body["messages"]["today"] == 3
     assert "domainsToday" in body["domains"]
+    assert "domainsSevenDays" in body["domains"]
     assert body["domains"]["active"] == 1

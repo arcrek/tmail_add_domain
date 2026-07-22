@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sqlite3
@@ -132,11 +132,17 @@ class StateStore:
             }
 
     def activity_summary(self) -> dict[str, object]:
-        today = datetime.now(timezone.utc).date().isoformat()
+        now = datetime.now(timezone.utc)
+        today = now.date().isoformat()
+        seven_days = (now - timedelta(days=7)).isoformat()
         with self._connect() as conn:
             domains_today = conn.execute(
                 "SELECT COUNT(*) FROM activity WHERE kind = 'domain_provisioned' AND created_at >= ?",
                 (today,),
+            ).fetchone()[0]
+            domains_seven_days = conn.execute(
+                "SELECT COUNT(*) FROM activity WHERE kind = 'domain_provisioned' AND created_at >= ?",
+                (seven_days,),
             ).fetchone()[0]
             recent_domains = [
                 dict(row)
@@ -145,4 +151,8 @@ class StateStore:
                     "ORDER BY id DESC LIMIT 10"
                 )
             ]
-            return {"domainsToday": domains_today, "recentDomains": recent_domains}
+            return {
+                "domainsToday": domains_today,
+                "domainsSevenDays": domains_seven_days,
+                "recentDomains": recent_domains,
+            }
