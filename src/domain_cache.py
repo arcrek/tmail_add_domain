@@ -21,6 +21,10 @@ class DomainCache:
         with self._lock:
             return domain in self._domains
 
+    def domains(self) -> list[str]:
+        with self._lock:
+            return sorted(self._domains)
+
     def add(self, domain: str) -> None:
         with self._lock:
             self._domains.add(domain)
@@ -29,6 +33,11 @@ class DomainCache:
     def add_many(self, domains: list) -> None:
         with self._lock:
             self._domains.update(domains)
+            self._persist()
+
+    def replace(self, domains: list[str]) -> None:
+        with self._lock:
+            self._domains = set(domains)
             self._persist()
 
     def _persist(self) -> None:

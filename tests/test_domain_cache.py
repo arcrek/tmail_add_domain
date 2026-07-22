@@ -49,3 +49,18 @@ def test_add_many(tmp_path):
     cache.add_many(["a.com", "b.com", "c.com"])
     assert cache.contains("a.com")
     assert cache.contains("c.com")
+
+
+def test_domains_are_sorted_copies_and_replace_persists(tmp_path):
+    path = str(tmp_path / "domains.json")
+    cache = DomainCache(path)
+    cache.load()
+    cache.add_many(["b.com", "a.com"])
+    domains = cache.domains()
+    assert domains == ["a.com", "b.com"]
+    domains.append("other.com")
+    assert cache.domains() == ["a.com", "b.com"]
+    cache.replace(["d.com", "c.com", "c.com"])
+    assert cache.domains() == ["c.com", "d.com"]
+    with open(path) as f:
+        assert json.load(f) == ["c.com", "d.com"]
