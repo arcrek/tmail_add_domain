@@ -33,7 +33,7 @@ class DomainCache:
             if not isinstance(data, list) or any(not isinstance(item, str) for item in data):
                 return None
             return set(data)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
             return None
 
     def load(self) -> None:

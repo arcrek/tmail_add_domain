@@ -18,6 +18,21 @@ def _add_after_stale_load(path, ready, proceed):
         raise RuntimeError("parent did not release cache writer")
     cache.add("new.example")
 
+
+def _fail_next_data_read(monkeypatch, path):
+    original_open = builtins.open
+    failures = 0
+
+    def failing_open(filename, *args, **kwargs):
+        nonlocal failures
+        if os.fspath(filename) == os.fspath(path) and failures == 0:
+            failures += 1
+            raise OSError(errno.EIO, "data read failed")
+        return original_open(filename, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", failing_open)
+    return lambda: failures
+
 def test_empty_on_missing_file(tmp_path):
     cache = DomainCache(str(tmp_path / "domains.json"))
     cache.load()
@@ -61,6 +76,10 @@ def test_missing_or_corrupt_reload_retains_last_valid_snapshot(tmp_path):
     assert cache.domains() == ["last-valid.example"]
 
     path.write_text("not json")
+    cache.load()
+    assert cache.domains() == ["last-valid.example"]
+
+    path.write_text('{"domain": "invalid schema"}')
     cache.load()
     assert cache.domains() == ["last-valid.example"]
 
@@ -148,6 +167,63 @@ def test_refresh_lock_failures_retain_generation_and_retry(
     assert cache.contains("new.example")
     assert not cache.contains("old.example")
     assert cache._generation != previous_generation
+
+
+def test_data_read_error_retains_generation_then_retries_new_snapshot(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "domains.json"
+    path.write_text('["old.example"]')
+    cache = DomainCache(str(path))
+    cache.load()
+    previous_generation = cache._generation
+    authoritative = DomainCache(str(path))
+    authoritative.load()
+    authoritative.replace(["new.example"])
+    failure_count = _fail_next_data_read(monkeypatch, path)
+
+    assert cache.contains("old.example")
+    assert cache.domains() == ["old.example"]
+    assert cache._generation == previous_generation
+    assert failure_count() == 1
+
+    assert cache.contains("new.example")
+    assert not cache.contains("old.example")
+    assert cache._generation != previous_generation
+
+
+def test_add_many_data_read_error_propagates_without_overwrite(tmp_path, monkeypatch):
+    path = tmp_path / "domains.json"
+    path.write_text('["old.example"]')
+    cache = DomainCache(str(path))
+    cache.load()
+    _fail_next_data_read(monkeypatch, path)
+
+    with pytest.raises(OSError, match="data read failed"):
+        cache.add_many(["new.example"])
+
+    assert cache.domains() == ["old.example"]
+    assert json.loads(path.read_text()) == ["old.example"]
+
+
+def test_replace_conflict_data_read_error_propagates_without_overwrite(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "domains.json"
+    path.write_text('["old.example"]')
+    cache = DomainCache(str(path))
+    cache.load()
+    previous_generation = cache.generation()
+    authoritative = DomainCache(str(path))
+    authoritative.load()
+    authoritative.replace(["new.example"])
+    _fail_next_data_read(monkeypatch, path)
+
+    with pytest.raises(OSError, match="data read failed"):
+        cache.replace(["replacement.example"], expected_generation=previous_generation)
+
+    assert cache.domains() == ["old.example"]
+    assert json.loads(path.read_text()) == ["new.example"]
 
 
 @pytest.mark.parametrize("operation", ["generation", "add", "add_many", "replace"])
