@@ -18,8 +18,8 @@ from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.staticfiles import StaticFiles
 
-from src.api_auth import AddressToken, AddressValidationError, active_domains, normalize_address
-from src.admin_api import router as admin_router
+from src.api_auth import AddressToken, AddressValidationError, _domain, active_domains, normalize_address
+from src.admin_api import refresh_domains, router as admin_router
 from src.api_models import (
     AccountResource,
     AddressRequest,
@@ -202,7 +202,19 @@ def current_domains(request: Request, config: Config | None = None) -> list[str]
 
 
 def _address(request: Request, value: str, config: Config | None = None) -> str:
-    return normalize_address(value, current_domains(request, config), request.app.state.state_store.get_settings())
+    domains = current_domains(request, config)
+    try:
+        raw_domain = value.rsplit("@", 1)[1] if value.count("@") == 1 else ""
+        missing = _domain(raw_domain) not in domains
+    except AddressValidationError:
+        missing = False
+    if missing and request.app.state.state_store.get_settings()["auto_sync_domains"]:
+        try:
+            refresh_domains(request, require_auto=True)
+        except Exception:
+            pass
+        domains = current_domains(request, config)
+    return normalize_address(value, domains, request.app.state.state_store.get_settings())
 
 
 def bearer_address(
@@ -427,6 +439,11 @@ def register_public_routes(app: FastAPI) -> None:
         response_class=_JsonLdResponse,
     )
     def domains(request: Request, page: int = Query(1, ge=1)):
+        if request.app.state.state_store.get_settings()["auto_sync_domains"]:
+            try:
+                refresh_domains(request, require_auto=True)
+            except Exception:
+                pass
         members = []
         for domain in current_domains(request):
             domain_id = _stable_id("domain", domain)

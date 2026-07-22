@@ -272,9 +272,10 @@ def update_settings(
     return settings(request, _session_value)
 
 
-@router.post("/sync-domains")
-def sync_domains(request: Request, _session_value: dict[str, object] = Depends(_csrf)):
+def refresh_domains(request: Request, *, require_auto: bool = False) -> list[str]:
     state = request.app.state.state_store
+    if require_auto and not state.get_settings()["auto_sync_domains"]:
+        return _active_domains(request)
     with request.app.state.admin_lock:
         jmap = request.app.state.jmap
     try:
@@ -289,6 +290,8 @@ def sync_domains(request: Request, _session_value: dict[str, object] = Depends(_
             with request.app.state.admin_lock:
                 if request.app.state.jmap is not jmap:
                     raise RuntimeError("JMAP client changed during sync")
+                if require_auto and not state.get_settings()["auto_sync_domains"]:
+                    return _active_domains(request)
                 if not request.app.state.domain_cache.replace(
                     domains, expected_generation=generation
                 ):
@@ -296,13 +299,20 @@ def sync_domains(request: Request, _session_value: dict[str, object] = Depends(_
                 if not state.get_settings()["auto_sync_domains"]:
                     state.replace_frozen_domains(domains)
                 state.record_sync(True, f"{len(domains)} domains")
-                break
-        else:
-            raise RuntimeError("Domain cache changed during sync")
+                return domains
+        raise RuntimeError("Domain cache changed during sync")
     except Exception as exc:
         state.record_sync(False, type(exc).__name__)
+        raise
+
+
+@router.post("/sync-domains")
+def sync_domains(request: Request, _session_value: dict[str, object] = Depends(_csrf)):
+    try:
+        domains = refresh_domains(request)
+    except Exception:
         raise HTTPException(502, "Domain sync failed") from None
-    return {"domains": domains, "lastSync": state.last_sync()}
+    return {"domains": domains, "lastSync": request.app.state.state_store.last_sync()}
 
 
 @router.post("/test-mail")
