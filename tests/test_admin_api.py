@@ -557,3 +557,40 @@ def test_settings_and_dashboard_keep_success_and_error_sync_history(admin_client
         assert body["lastSync"]["success"] is False
         assert body["lastSuccessfulSync"]["detail"] == "1 domain"
         assert body["lastSyncError"]["detail"] == "TimeoutError"
+
+
+def test_automatic_sync_does_not_query_after_auto_sync_is_disabled(
+    admin_client, fake_jmap, monkeypatch
+):
+    request = SimpleNamespace(app=admin_client.app)
+    state = request.app.state.state_store
+    cache = request.app.state.domain_cache
+    entered_generation = threading.Event()
+    release_generation = threading.Event()
+    original_generation = cache.generation
+    errors = []
+
+    def generation():
+        entered_generation.set()
+        assert release_generation.wait(1)
+        return original_generation()
+
+    def refresh():
+        try:
+            admin_api.refresh_domains(request, require_auto=True)
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(cache, "generation", generation)
+    worker = threading.Thread(target=refresh)
+    worker.start()
+    assert entered_generation.wait(1)
+    with request.app.state.admin_lock:
+        state.replace_frozen_domains(["old.example"])
+        state.update_settings({"auto_sync_domains": False})
+    release_generation.set()
+    worker.join(2)
+
+    assert not worker.is_alive()
+    assert not errors
+    fake_jmap.list_domains.assert_not_called()

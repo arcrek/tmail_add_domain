@@ -276,12 +276,20 @@ def refresh_domains(request: Request, *, require_auto: bool = False) -> list[str
     state = request.app.state.state_store
     if require_auto and not state.get_settings()["auto_sync_domains"]:
         return _active_domains(request)
-    with request.app.state.admin_lock:
-        jmap = request.app.state.jmap
+    if not require_auto:
+        with request.app.state.admin_lock:
+            jmap = request.app.state.jmap
     try:
         for _attempt in range(3):
             generation = request.app.state.domain_cache.generation()
-            values = jmap.list_domains()
+            if require_auto:
+                with request.app.state.admin_lock:
+                    if not state.get_settings()["auto_sync_domains"]:
+                        return _active_domains(request)
+                    jmap = request.app.state.jmap
+                    values = jmap.list_domains()
+            else:
+                values = jmap.list_domains()
             if not values:
                 raise ValueError("Stalwart returned no domains")
             domains = _list(values, "domains", _domain)

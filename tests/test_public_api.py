@@ -548,6 +548,8 @@ def test_openapi_documents_passwordless_bearer_contract(client):
     address_schema = schema["components"]["schemas"]["AddressRequest"]
     assert set(address_schema["properties"]) == {"address"}
     assert "box@example.com" in json.dumps(address_schema)
+
+
 def test_domains_refresh_from_stalwart_when_auto_sync_is_on(client, fake_jmap, config_path):
     fake_jmap.list_domains.return_value = ["example.com", "new.example"]
 
@@ -588,4 +590,14 @@ def test_frozen_domains_never_query_stalwart(client, fake_jmap):
 
     assert response.status_code == 200
     assert response.json()["hydra:member"][0]["domain"] == "frozen.example"
+    fake_jmap.list_domains.assert_not_called()
+
+
+def test_missing_token_domain_does_not_query_stalwart_when_auto_sync_is_off(client, fake_jmap):
+    client.app.state.state_store.replace_frozen_domains(["example.com"])
+    client.app.state.state_store.update_settings({"auto_sync_domains": False})
+
+    response = client.post("/token", json={"address": "box@new.example"})
+
+    assert response.status_code == 422
     fake_jmap.list_domains.assert_not_called()
