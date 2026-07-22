@@ -8,26 +8,14 @@ REMOTE_DIR="/opt/tmail-policy"
 POLICY_SERVICE_FILE="deploy/tmail-policy.service"
 API_SERVICE_FILE="deploy/tmail-api.service"
 STAGE_DIR=""
-BACKUP_DIR=""
 MAIN_CF_TMP=""
-PROMOTED=0
 
 cleanup() {
     status=$?
     trap - EXIT
     set +e
-    if [ "$status" -ne 0 ] && [ "$PROMOTED" -eq 1 ]; then
-        mv "$REMOTE_DIR" "$BACKUP_DIR/failed"
-        if [ -e "$BACKUP_DIR/release" ]; then
-            mv "$BACKUP_DIR/release" "$REMOTE_DIR"
-            systemctl daemon-reload
-            systemctl restart tmail-policy
-            systemctl restart tmail-api
-        fi
-    fi
     [[ "$MAIN_CF_TMP" == /etc/postfix/.main.cf.dedup.* ]] && rm -f -- "$MAIN_CF_TMP"
     [[ "$STAGE_DIR" == /opt/.tmail-policy.stage.* ]] && rm -rf -- "$STAGE_DIR"
-    [[ "$BACKUP_DIR" == /opt/.tmail-policy.backup.* ]] && rm -rf -- "$BACKUP_DIR"
     exit "$status"
 }
 trap cleanup EXIT
@@ -58,7 +46,7 @@ cp requirements.txt "$STAGE_DIR/requirements.txt"
 cp src/*.py "$STAGE_DIR/src/"
 cp -r frontend/dist/. "$STAGE_DIR/frontend/dist/"
 cp "$POLICY_SERVICE_FILE" "$API_SERVICE_FILE" deploy/tmail-janitor.service \
-    deploy/tmail-janitor.timer deploy/accepted_domains "$STAGE_DIR/deploy/"
+    deploy/tmail-janitor.timer deploy/accepted_domains deploy/release.sh "$STAGE_DIR/deploy/"
 
 echo "==> Validating staged web config"
 (cd "$STAGE_DIR" && PYTHONPATH="$STAGE_DIR" python3 -m src.config validate-web "$STAGE_DIR/config.json")
@@ -154,35 +142,9 @@ echo ""
 echo "==> Verifying port ownership"
 ss -tlnp | grep -E ':25|:2525' || true
 
-echo "==> Installing staged systemd units"
-cp "$STAGE_DIR/deploy/tmail-policy.service" /etc/systemd/system/tmail-policy.service
-cp "$STAGE_DIR/deploy/tmail-api.service" /etc/systemd/system/tmail-api.service
-cp "$STAGE_DIR/deploy/tmail-janitor.service" /etc/systemd/system/tmail-janitor.service
-cp "$STAGE_DIR/deploy/tmail-janitor.timer" /etc/systemd/system/tmail-janitor.timer
-
 echo "==> Promoting staged release"
-BACKUP_DIR=$(mktemp -d /opt/.tmail-policy.backup.XXXXXX)
-if [ -e "$REMOTE_DIR" ]; then
-    mv "$REMOTE_DIR" "$BACKUP_DIR/release"
-fi
-if ! mv "$STAGE_DIR" "$REMOTE_DIR"; then
-    [ ! -e "$BACKUP_DIR/release" ] || mv "$BACKUP_DIR/release" "$REMOTE_DIR"
-    exit 1
-fi
+bash "$STAGE_DIR/deploy/release.sh" "$STAGE_DIR" "$REMOTE_DIR"
 STAGE_DIR=""
-PROMOTED=1
-
-echo "==> Enabling and starting services"
-systemctl daemon-reload
-systemctl enable tmail-policy tmail-api tmail-janitor.timer
-systemctl restart tmail-policy
-systemctl restart tmail-api
-systemctl start tmail-janitor.timer
-systemctl status tmail-policy tmail-api --no-pager -l
-
-PROMOTED=0
-rm -rf -- "$BACKUP_DIR"
-BACKUP_DIR=""
 
 echo ""
 echo "==> Done. Postfix on :25, Stalwart receiving on :2525."
