@@ -145,6 +145,20 @@ def test_messages_require_bearer_and_return_hydra(client, bearer):
     assert response.json()["@id"] == "/messages"
 
 
+def test_messages_accept_null_jmap_address_names(client, bearer, fake_jmap):
+    message = dict(MESSAGE)
+    message["from"] = [{"name": None, "email": "sender@example.net"}]
+    message["to"] = [{"name": None, "email": "box@example.com"}]
+    fake_jmap.list_messages.return_value = (1, [message])
+
+    response = client.get("/messages", headers=bearer)
+
+    assert response.status_code == 200
+    item = response.json()["hydra:member"][0]
+    assert item["from"]["name"] == ""
+    assert item["to"][0]["name"] == ""
+
+
 def test_message_pagination_uses_configured_limit(client, bearer, fake_jmap):
     client.app.state.state_store.update_settings({"message_limit": 7})
     fake_jmap.list_messages.return_value = (15, [dict(MESSAGE)])

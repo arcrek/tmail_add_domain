@@ -77,6 +77,24 @@ def test_admin_login_sets_http_only_cookie(client):
     assert "Secure" in cookie
 
 
+def test_admin_login_cookie_works_on_local_http(config_path, fake_jmap):
+    app = create_app(str(config_path))
+    app.state.jmap = fake_jmap
+    with TestClient(app, base_url="http://127.0.0.1") as local_client:
+        response = local_client.post("/admin/api/login", json={"password": "admin-secret"})
+
+        assert "Secure" not in response.headers["set-cookie"]
+        assert local_client.get("/admin/api/settings").status_code == 200
+
+
+def test_admin_session_can_be_resumed(admin_client):
+    response = admin_client.get("/admin/api/session")
+
+    assert response.status_code == 200
+    assert response.json() == {"csrfToken": admin_client.csrf["X-CSRF-Token"]}
+    assert response.headers["cache-control"] == "no-store"
+
+
 def test_wrong_password_is_rejected(client):
     response = client.post("/admin/api/login", json={"password": "wrong"})
     assert response.status_code == 401

@@ -276,7 +276,8 @@ def _emails(values: object) -> list[EmailAddress]:
     for value in values:
         address = _email_value(value)
         if address:
-            result.append(EmailAddress(name=value.get("name", "") if isinstance(value, dict) else "", address=address))
+            name = value.get("name") if isinstance(value, dict) else ""
+            result.append(EmailAddress(name=name if isinstance(name, str) else "", address=address))
     return result
 
 

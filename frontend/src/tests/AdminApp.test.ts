@@ -11,6 +11,7 @@ import MailServerTab from '../admin/MailServerTab.vue'
 
 const mocks = vi.hoisted(() => ({
   login: vi.fn(),
+  session: vi.fn(),
   logout: vi.fn(),
   settings: vi.fn(),
   updateSettings: vi.fn(),
@@ -109,6 +110,7 @@ describe('administration frontend', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset())
     mocks.login.mockResolvedValue({ csrfToken: 'csrf-value' })
+    mocks.session.mockRejectedValue(new Error('No active session'))
     mocks.logout.mockResolvedValue(undefined)
     mocks.settings.mockResolvedValue(settings)
     mocks.updateSettings.mockResolvedValue(settings)
@@ -146,6 +148,17 @@ describe('administration frontend', () => {
       'HTML & Ads',
     ])
     expect(wrapper.find('main').exists()).toBe(false)
+  })
+
+  it('resumes an existing admin session on reload', async () => {
+    mocks.session.mockResolvedValueOnce({ csrfToken: 'resumed-csrf' })
+    const wrapper = mount(AdminApp)
+    await flushPromises()
+
+    expect(mocks.settings).toHaveBeenCalledTimes(1)
+    expect(wrapper.findAll('[role="tab"]')).toHaveLength(5)
+    await wrapper.get('button.text-button').trigger('click')
+    expect(mocks.logout).toHaveBeenCalledWith('resumed-csrf')
   })
 
   it('invalidates a new session when settings hydration fails', async () => {

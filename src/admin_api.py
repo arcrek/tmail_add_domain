@@ -203,9 +203,17 @@ def login(request: Request, body: dict[str, object] = Body(...)):
     response = JSONResponse({"csrfToken": csrf_token})
     response.set_cookie(
         "tmail_admin", session_token, max_age=12 * 60 * 60,
-        httponly=True, secure=True, samesite="strict", path="/admin",
+        httponly=True, secure=request.url.scheme == "https", samesite="strict", path="/admin",
     )
     return response
+
+
+@router.get("/session")
+def resume_session(session: dict[str, object] = Depends(_session)):
+    return JSONResponse(
+        {"csrfToken": session["csrf_token"]},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/logout", status_code=204)

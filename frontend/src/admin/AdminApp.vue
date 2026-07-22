@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { api } from '../api'
 import type { AdminSettings } from '../types'
 import ContentTab from './ContentTab.vue'
@@ -19,6 +19,17 @@ const pending = ref(false)
 const childBusy = ref(false)
 const cleanupCsrf = ref('')
 const error = ref('')
+
+onMounted(async () => {
+  try {
+    const session = await api.admin.session()
+    const loaded = await api.admin.settings()
+    csrf.value = session.csrfToken
+    settings.value = loaded
+  } catch {
+    // No valid cookie: keep showing the login form.
+  }
+})
 
 function moveTab(event: KeyboardEvent, index: number): void {
   if (childBusy.value) return

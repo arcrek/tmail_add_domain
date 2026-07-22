@@ -85,6 +85,7 @@ export const api = {
   admin: {
     login: (password: string) =>
       request<{ csrfToken: string }>('/admin/api/login', { method: 'POST', ...json({ password }) }),
+    session: () => request<{ csrfToken: string }>('/admin/api/session'),
     logout: (csrf: string) =>
       request<void>('/admin/api/logout', { method: 'POST', csrf }),
     settings: () => request<AdminSettings>('/admin/api/settings'),
