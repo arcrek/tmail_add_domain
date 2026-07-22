@@ -246,7 +246,9 @@ main {
 .address-intro h1 {
   max-width: 15ch;
   margin-bottom: 1rem;
-  font-size: clamp(2.2rem, 5vw, 4.5rem);
+  font-size: 2rem;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
 }
 
 .address-workspace {
@@ -1173,7 +1175,7 @@ button:active:not(:disabled) {
   border: 0;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 952px) {
   .three-pane {
     grid-template-columns: 12rem minmax(17rem, 1fr);
   }
