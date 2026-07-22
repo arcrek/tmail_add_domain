@@ -20,6 +20,44 @@ UNITS_BACKED_UP=0
 CONFIG_CREATED=0
 CONFIG_ID=""
 
+unit_activity() {
+    local state
+    state=$("$SYSTEMCTL" is-active "$1" 2>/dev/null)
+    case "$state" in
+        active|activating|reloading|deactivating) echo active ;;
+        inactive|failed|unknown) echo inactive ;;
+        *) echo inconclusive ;;
+    esac
+}
+
+unit_enablement() {
+    local state
+    state=$("$SYSTEMCTL" is-enabled "$1" 2>/dev/null)
+    case "$state" in
+        enabled|enabled-runtime) echo enabled ;;
+        disabled|not-found|static|indirect|masked|masked-runtime|generated|transient|alias|linked|linked-runtime)
+            echo disabled
+            ;;
+        *) echo inconclusive ;;
+    esac
+}
+
+stop_if_active() {
+    case "$(unit_activity "$1")" in
+        active) "$SYSTEMCTL" stop "$1" ;;
+        inactive) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+disable_if_enabled() {
+    case "$(unit_enablement "$1")" in
+        enabled) "$SYSTEMCTL" disable "$1" ;;
+        disabled) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 cleanup() {
     status=$?
     trap - EXIT
@@ -28,13 +66,18 @@ cleanup() {
 
     if [ "$status" -ne 0 ] && [ "$UNITS_BACKED_UP" -eq 1 ]; then
         for unit in "${UNITS[@]}"; do
-            "$SYSTEMCTL" stop "$unit" || rollback_failed=1
-            "$SYSTEMCTL" disable "$unit" || rollback_failed=1
+            stop_if_active "$unit" || rollback_failed=1
+            disable_if_enabled "$unit" || rollback_failed=1
         done
 
         if [ "$CONFIG_CREATED" -eq 1 ]; then
-            runuser -u tmail-policy -- /usr/bin/python3 "$REMOTE_DIR/src/config.py" \
-                remove-runtime "$CONFIG_FILE" "$CONFIG_ID" || rollback_failed=1
+            # Config removal is safe only after systemd conclusively reports no API writer.
+            if [ "$(unit_activity tmail-api.service)" = inactive ]; then
+                runuser -u tmail-policy -- /usr/bin/python3 "$REMOTE_DIR/src/config.py" \
+                    remove-runtime "$CONFIG_FILE" "$CONFIG_ID" || rollback_failed=1
+            else
+                rollback_failed=1
+            fi
         fi
         if [ "$PROMOTED" -eq 1 ] && [ -e "$REMOTE_DIR" ]; then
             mv "$REMOTE_DIR" "$BACKUP_DIR/failed" || rollback_failed=1
@@ -55,12 +98,12 @@ cleanup() {
             if [ -e "$BACKUP_DIR/state/$unit.enabled" ]; then
                 "$SYSTEMCTL" enable "$unit" || rollback_failed=1
             else
-                "$SYSTEMCTL" disable "$unit" || rollback_failed=1
+                disable_if_enabled "$unit" || rollback_failed=1
             fi
             if [ -e "$BACKUP_DIR/state/$unit.active" ]; then
                 "$SYSTEMCTL" start "$unit" || rollback_failed=1
             else
-                "$SYSTEMCTL" stop "$unit" || rollback_failed=1
+                stop_if_active "$unit" || rollback_failed=1
             fi
         done
     fi

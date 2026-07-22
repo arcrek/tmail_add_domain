@@ -32,10 +32,44 @@ command=$1
 shift || true
 printf '%s %s\n' "$command" "$*" >> "$FAKE_SYSTEMD_STATE/log"
 case "$command" in
-    is-enabled) [ -e "$FAKE_SYSTEMD_STATE/enabled/$1" ] ;;
-    is-active) [ -e "$FAKE_SYSTEMD_STATE/active/$1" ] ;;
+    is-enabled)
+        if [ -e "$FAKE_SYSTEMD_STATE/enabled/$1" ]; then
+            printf 'enabled\n'
+            exit 0
+        fi
+        if [ -e "$TMAIL_SYSTEMD_DIR/$1" ]; then
+            printf 'disabled\n'
+        else
+            printf 'not-found\n'
+        fi
+        exit 1
+        ;;
+    is-active)
+        if [ "$1" = tmail-api.service ] \
+            && [ -e "$FAKE_SYSTEMD_STATE/fail-api-state-check" ]; then
+            exit 48
+        fi
+        if [ -e "$FAKE_SYSTEMD_STATE/active/$1" ]; then
+            printf 'active\n'
+            exit 0
+        fi
+        if [ -e "$TMAIL_SYSTEMD_DIR/$1" ]; then
+            printf 'inactive\n'
+            exit 3
+        fi
+        printf 'unknown\n'
+        exit 4
+        ;;
     enable) for unit in "$@"; do : > "$FAKE_SYSTEMD_STATE/enabled/$unit"; done ;;
-    disable) for unit in "$@"; do rm -f "$FAKE_SYSTEMD_STATE/enabled/$unit"; done ;;
+    disable)
+        for unit in "$@"; do
+            if [ -e "$FAKE_SYSTEMD_STATE/fail-disabled-disable" ] \
+                && [ ! -e "$FAKE_SYSTEMD_STATE/enabled/$unit" ]; then
+                exit 49
+            fi
+            rm -f "$FAKE_SYSTEMD_STATE/enabled/$unit"
+        done
+        ;;
     start) for unit in "$@"; do : > "$FAKE_SYSTEMD_STATE/active/$unit"; done ;;
     stop)
         for unit in "$@"; do
@@ -53,6 +87,12 @@ case "$command" in
     restart)
         if [ "$1" = tmail-api.service ] && [ -e "$FAKE_SYSTEMD_STATE/fail-api" ]; then
             [ -f "$FAKE_RUNTIME_CONFIG" ] || exit 44
+            if [ -e "$FAKE_SYSTEMD_STATE/api-active-on-failure" ]; then
+                : > "$FAKE_SYSTEMD_STATE/active/tmail-api.service"
+            fi
+            if [ -e "$FAKE_SYSTEMD_STATE/break-api-state-check-on-failure" ]; then
+                : > "$FAKE_SYSTEMD_STATE/fail-api-state-check"
+            fi
             if [ -e "$FAKE_SYSTEMD_STATE/replace-runtime-before-fail" ]; then
                 printf 'concurrent replacement' > "$FAKE_RUNTIME_CONFIG.replacement"
                 mv "$FAKE_RUNTIME_CONFIG.replacement" "$FAKE_RUNTIME_CONFIG"
@@ -178,6 +218,22 @@ def test_failed_fresh_install_removes_new_units_and_stops_services(tmp_path):
     assert not list(systemd.iterdir())
     assert not _state_files(state, "enabled")
     assert not _state_files(state, "active")
+    assert not list(tmp_path.glob(".tmail-policy.backup.*"))
+
+
+def test_failed_fresh_install_skips_absent_unit_cleanup_actions(tmp_path):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+    (state / "fail-api").touch()
+    (state / "fail-inactive-stop").touch()
+    (state / "fail-disabled-disable").touch()
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 42
+    assert not live.exists()
+    assert not list(systemd.iterdir())
+    assert not (state.parent / "runtime" / "config.json").exists()
     assert not list(tmp_path.glob(".tmail-policy.backup.*"))
 
 
@@ -332,6 +388,45 @@ def test_failed_release_preserves_concurrent_runtime_config_replacement(tmp_path
     runtime_config = state.parent / "runtime" / "config.json"
     assert runtime_config.read_text() == "concurrent replacement"
     assert (live / "version").read_text() == "old"
+    assert "rollback incomplete" in result.stderr
+    assert list(tmp_path.glob(".tmail-policy.backup.*"))
+
+
+def test_failed_release_skips_config_removal_when_api_cannot_be_stopped(tmp_path):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+    live.mkdir()
+    (live / "version").write_text("old")
+    (state / "fail-api").touch()
+    (state / "api-active-on-failure").touch()
+    (state / "fail-active-stop").touch()
+    (state / "replace-runtime-before-fail").touch()
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 42
+    runtime_config = state.parent / "runtime" / "config.json"
+    assert runtime_config.read_text() == "concurrent replacement"
+    assert (live / "version").read_text() == "old"
+    assert "remove-runtime" not in (state / "log").read_text()
+    assert "rollback incomplete" in result.stderr
+    assert list(tmp_path.glob(".tmail-policy.backup.*"))
+
+
+def test_failed_release_skips_config_removal_when_api_state_is_inconclusive(tmp_path):
+    stage, live, systemd = _release_tree(tmp_path)
+    command, state = _fake_systemctl(tmp_path)
+    live.mkdir()
+    (live / "version").write_text("old")
+    (state / "fail-api").touch()
+    (state / "break-api-state-check-on-failure").touch()
+
+    result = _run_release(stage, live, systemd, command, state)
+
+    assert result.returncode == 42
+    assert (state.parent / "runtime" / "config.json").exists()
+    assert (live / "version").read_text() == "old"
+    assert "remove-runtime" not in (state / "log").read_text()
     assert "rollback incomplete" in result.stderr
     assert list(tmp_path.glob(".tmail-policy.backup.*"))
 
