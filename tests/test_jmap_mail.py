@@ -46,6 +46,40 @@ def test_discovers_personal_mail_account_from_session(client, mocked_get):
     assert client.discover_mail_account_id() == "mail-account"
 
 
+def test_discovers_session_via_well_known_when_api_url_is_not_gettable(client, mocked_get):
+    not_a_session = response({})
+    not_a_session.raise_for_status.side_effect = RuntimeError("404")
+    mocked_get.side_effect = [
+        not_a_session,
+        response({
+            "apiUrl": "https://mail.example/jmap/",
+            "primaryAccounts": {MAIL_CAPABILITY: "mail-account"},
+            "accounts": {"mail-account": {"isPersonal": True}},
+        }),
+    ]
+
+    assert client.discover_mail_account_id() == "mail-account"
+    assert mocked_get.call_args_list[1].args[0] == "https://mail.example/.well-known/jmap"
+    assert mocked_get.call_args_list[1].kwargs["follow_redirects"] is True
+
+
+def test_method_calls_use_api_url_advertised_by_session(client, mocked_get, mocked_post):
+    mocked_get.return_value = response({
+        "apiUrl": "https://mail.example/jmap/",
+        "primaryAccounts": {MAIL_CAPABILITY: "mail-account"},
+        "accounts": {"mail-account": {"isPersonal": True}},
+    })
+    mocked_post.return_value = response({"methodResponses": [
+        ["Email/query", {"ids": [], "total": 0}, "q"],
+        ["Email/get", {"list": []}, "g"],
+    ]})
+
+    client.discover_mail_account_id()
+    client.list_messages("mail-account", "box@example.com", 15, 0)
+
+    assert mocked_post.call_args.args[0] == "https://mail.example/jmap/"
+
+
 def test_list_messages_queries_recipient_and_returns_query_total(client, mocked_post):
     mocked_post.return_value = response({"methodResponses": [
         ["Email/query", {"ids": ["m1"], "total": 1}, "q"],

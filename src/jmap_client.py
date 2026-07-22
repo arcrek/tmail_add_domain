@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 import logging
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
@@ -76,11 +76,12 @@ class JmapClient:
         self._catchall = catchall_address
         self._client = client or httpx
         self._session = None
+        self._api_url = url
 
     def _call(self, method_calls: list, using: list[str]) -> list:
         try:
             response = self._client.post(
-                self._url,
+                self._api_url,
                 json={"using": using, "methodCalls": method_calls},
                 headers=self._headers,
                 timeout=30,
@@ -108,15 +109,25 @@ class JmapClient:
 
     def _get_session(self) -> dict:
         if self._session is None:
-            try:
-                response = self._client.get(self._url, headers=self._headers, timeout=30)
-                response.raise_for_status()
-                payload = response.json()
-            except Exception:
-                raise JmapUpstreamError() from None
-            if not isinstance(payload, dict):
+            parts = urlsplit(self._url)
+            well_known = urlunsplit((parts.scheme, parts.netloc, "/.well-known/jmap", "", ""))
+            for url in dict.fromkeys((self._url, well_known)):
+                try:
+                    response = self._client.get(
+                        url, headers=self._headers, timeout=30, follow_redirects=True
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                except Exception:
+                    continue
+                if isinstance(payload, dict):
+                    self._session = payload
+                    api_url = payload.get("apiUrl")
+                    if isinstance(api_url, str) and api_url:
+                        self._api_url = api_url
+                    break
+            if self._session is None:
                 raise JmapUpstreamError()
-            self._session = payload
         return self._session
 
     def provision_domain(self, domain: str) -> bool:
