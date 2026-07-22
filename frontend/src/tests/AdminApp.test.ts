@@ -253,13 +253,10 @@ describe('administration frontend', () => {
 
     expect(wrapper.text()).toContain('Stored messages')
     expect(wrapper.text()).toContain('41')
-    expect(wrapper.text()).toContain('Provisions in seven days')
-    expect(wrapper.text()).toContain('9')
-    expect(wrapper.text()).toContain('fresh.example')
-    expect(wrapper.text()).toContain('2 domains')
-    expect(wrapper.text()).toContain('ValueError')
+    expect(wrapper.text()).toContain('Messages today')
+    expect(wrapper.text()).toContain('Messages in seven days')
     expect(wrapper.find('canvas').exists()).toBe(false)
-    expect(wrapper.text()).not.toMatch(/CPU|memory|host uptime/i)
+    expect(wrapper.text()).not.toMatch(/CPU|memory|host uptime|active domains|provision|domain sync|auto-sync/i)
   })
 
   it('saves general settings with the in-memory CSRF token', async () => {
@@ -445,6 +442,62 @@ describe('administration frontend', () => {
     expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/current whitelist.*freeze/i))
     expect((wrapper.get('input[name="autoSyncDomains"]').element as HTMLInputElement).checked).toBe(true)
     expect(mocks.updateSettings).not.toHaveBeenCalled()
+  })
+
+  it('persists auto-sync immediately and keeps it in the later full save', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const updated = {
+      ...settings,
+      site: { ...site, autoSyncDomains: false },
+      domains: ['updated.example'],
+    }
+    mocks.updateSettings.mockResolvedValueOnce(updated).mockResolvedValueOnce(updated)
+    const wrapper = mount(DomainsTab, {
+      props: {
+        site,
+        domains: settings.domains,
+        lastSync: settings.lastSync,
+        lastSuccessfulSync: settings.lastSuccessfulSync,
+        lastSyncError: settings.lastSyncError,
+        csrf: 'csrf-value',
+      },
+    })
+
+    await wrapper.get('input[name="autoSyncDomains"]').setValue(false)
+    await flushPromises()
+
+    expect(mocks.updateSettings).toHaveBeenNthCalledWith(1, {
+      site: { autoSyncDomains: false },
+    }, 'csrf-value')
+    expect(wrapper.emitted('updated')?.[0]).toEqual([updated])
+    expect(wrapper.text()).toContain('updated.example')
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.updateSettings).toHaveBeenNthCalledWith(2, { site: expect.objectContaining({
+      autoSyncDomains: false,
+    }) }, 'csrf-value')
+  })
+
+  it('rolls back auto-sync when the immediate update fails', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    mocks.updateSettings.mockRejectedValueOnce(new Error('save offline'))
+    const wrapper = mount(DomainsTab, {
+      props: {
+        site,
+        domains: settings.domains,
+        lastSync: settings.lastSync,
+        lastSuccessfulSync: settings.lastSuccessfulSync,
+        lastSyncError: settings.lastSyncError,
+        csrf: 'csrf-value',
+      },
+    })
+
+    await wrapper.get('input[name="autoSyncDomains"]').setValue(false)
+    await flushPromises()
+
+    expect((wrapper.get('input[name="autoSyncDomains"]').element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.get('[role="alert"]').text()).toContain('save offline')
   })
 
   it('replaces the displayed whitelist only after a successful manual sync', async () => {

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:sandbox-browser": "node scripts/message-sandbox-smoke.mjs"
   },
   "dependencies": {
     "vue": "^3.5.0"

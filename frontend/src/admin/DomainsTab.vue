@@ -73,13 +73,32 @@ function applySettings(settings: AdminSettings, replaceDomains: boolean): void {
   displayedSyncError.value = { ...settings.lastSyncError }
 }
 
-function changeAutoSync(event: Event): void {
+async function changeAutoSync(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
+  const previous = draft.autoSyncDomains
   if (!input.checked && !window.confirm('Turn off auto-sync? The current whitelist will freeze until you sync manually or turn auto-sync on.')) {
-    input.checked = true
+    input.checked = previous
     return
   }
-  draft.autoSyncDomains = input.checked
+  const checked = input.checked
+  draft.autoSyncDomains = checked
+  error.value = ''
+  status.value = ''
+  pending.value = true
+  try {
+    const settings = await api.admin.updateSettings({ site: { autoSyncDomains: checked } }, props.csrf)
+    draft.autoSyncDomains = settings.site.autoSyncDomains
+    input.checked = settings.site.autoSyncDomains
+    emit('updated', settings)
+    applySettings(settings, true)
+    status.value = `Auto-sync ${settings.site.autoSyncDomains ? 'enabled' : 'disabled'}.`
+  } catch (cause) {
+    draft.autoSyncDomains = previous
+    input.checked = previous
+    error.value = cause instanceof Error ? cause.message : 'Could not update auto-sync.'
+  } finally {
+    pending.value = false
+  }
 }
 
 async function save(): Promise<void> {

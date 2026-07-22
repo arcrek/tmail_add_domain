@@ -101,12 +101,17 @@ addEventListener("message", (event) => {{
   const value = event.data;
   if (event.source !== parent || !value || value.type !== "tmail:sandbox-content") return;
   if (value.mode !== "message" || typeof value.html !== "string") return;
+  const content = new DOMParser().parseFromString(value.html, "text/html");
+  for (const meta of content.querySelectorAll("meta[http-equiv]")) {{
+    if (meta.httpEquiv.toLowerCase() === "refresh") meta.remove();
+  }}
   document.open();
   document.write('<!doctype html><html><head><meta charset="utf-8">');
   document.write('<meta name="viewport" content="width=device-width,initial-scale=1">');
   document.write('<style>html,body{{margin:0;padding:0;max-width:100%;overflow-wrap:anywhere}}body{{padding:16px}}img{{max-width:100%;height:auto}}table{{max-width:100%}}</style>');
+  document.write(content.head.innerHTML);
   document.write('</head><body>');
-  document.write(value.html);
+  document.write(content.body.innerHTML);
   document.write('</body></html>');
   document.close();
   for (const link of document.links) {{
