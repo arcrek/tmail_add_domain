@@ -23,6 +23,8 @@ from src.api_models import (
     HydraDomains,
     HydraError,
     HydraMessages,
+    HydraSearch,
+    HydraView,
     MessageResource,
     MessageSummary,
     SeenPatch,
@@ -42,6 +44,41 @@ _ERROR_RESPONSES = {
     422: {"model": HydraError},
     502: {"model": HydraError},
 }
+_TOKEN_RESPONSES = {**_ERROR_RESPONSES, 429: {"model": HydraError}}
+_ATTACHMENT_RESPONSES = {
+    **_ERROR_RESPONSES,
+    200: {"description": "Attachment bytes", "content": {
+        "application/octet-stream": {"schema": {"type": "string", "format": "binary"}},
+    }},
+}
+_SOURCE_RESPONSES = {
+    **_ERROR_RESPONSES,
+    200: {"description": "RFC 822 message source", "content": {
+        "message/rfc822": {"schema": {"type": "string", "format": "binary"}},
+    }},
+}
+
+
+class _FixedWindowLimiter:
+    def __init__(self, limit: int, seconds: float):
+        self._limit = limit
+        self._seconds = seconds
+        self._windows: dict[tuple[str, str], tuple[float, int]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: tuple[str, str]) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            # ponytail: process-local O(n) pruning; use a shared limiter if distributed traffic makes this hot.
+            self._windows = {
+                item: window for item, window in self._windows.items()
+                if now - window[0] < self._seconds
+            }
+            started, count = self._windows.get(key, (now, 0))
+            if count >= self._limit:
+                return False
+            self._windows[key] = (started, count + 1)
+            return True
 
 
 def _stable_id(kind: str, value: str) -> str:
@@ -82,11 +119,9 @@ def _email_value(value: object) -> str | None:
     return None
 
 
-def message_for_address(request: Request, address: str, message_id: str) -> tuple[str, dict]:
-    account_id = mail_account_id(request)
-    message = request.app.state.jmap.get_message(account_id, message_id)
-    if not message:
-        raise HTTPException(404, "Message not found")
+def _message_belongs_to_address(request: Request, address: str, message: object) -> bool:
+    if not isinstance(message, dict):
+        return False
     recipients = []
     for field in ("to", "cc", "bcc", "header:Delivered-To:asAddresses"):
         recipients.extend(message.get(field) or [])
@@ -96,9 +131,17 @@ def message_for_address(request: Request, address: str, message_id: str) -> tupl
             continue
         try:
             if _address(request, value) == address:
-                return account_id, message
+                return True
         except AddressValidationError:
             pass
+    return False
+
+
+def message_for_address(request: Request, address: str, message_id: str) -> tuple[str, dict]:
+    account_id = mail_account_id(request)
+    message = request.app.state.jmap.get_message(account_id, message_id)
+    if _message_belongs_to_address(request, address, message):
+        return account_id, message
     raise HTTPException(404, "Message not found")
 
 
@@ -176,6 +219,12 @@ def _message(message: dict, account_id: str, blocked_domains: set[str]) -> Messa
             filename=str(attachment.get("name") or "attachment"),
             content_type=str(attachment.get("type") or "application/octet-stream"),
             disposition=str(attachment.get("disposition") or "attachment"),
+            transfer_encoding=str(
+                attachment.get("transferEncoding")
+                or attachment.get("header:Content-Transfer-Encoding:asText")
+                or "binary"
+            ),
+            related=bool(attachment.get("related") or attachment.get("cid")),
             size=int(attachment.get("size") or 0),
             download_url=f"/messages/{summary.id}/attachments/{blob_id}",
             created_at=created,
@@ -186,6 +235,9 @@ def _message(message: dict, account_id: str, blocked_domains: set[str]) -> Messa
         cc=_emails(message.get("cc")),
         bcc=_emails(message.get("bcc")),
         flagged=bool((message.get("keywords") or {}).get("$flagged")),
+        verifications=[str(value) for value in message.get("verifications") or []],
+        retention=bool(message.get("retention")),
+        retention_date=message.get("retentionDate"),
         text="\n".join(_body_parts(message, "textBody")),
         html=_body_parts(message, "htmlBody"),
         attachments=attachments,
@@ -214,6 +266,17 @@ def _download_headers(filename: str) -> dict[str, str]:
     return {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(safe_name, safe='')}"}
 
 
+def _collection_metadata(path: str, page: int, total: int, page_size: int) -> tuple[HydraView, HydraSearch]:
+    last_page = max(1, (total + page_size - 1) // page_size)
+    return HydraView(
+        iri=f"{path}?page={page}",
+        first=f"{path}?page=1",
+        last=f"{path}?page={last_page}",
+        previous=f"{path}?page={page - 1}" if page > 1 else None,
+        next=f"{path}?page={page + 1}" if page < last_page else None,
+    ), HydraSearch(template=f"{path}{{?page}}")
+
+
 def register_public_routes(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, _exc: RequestValidationError):
@@ -229,8 +292,8 @@ def register_public_routes(app: FastAPI) -> None:
     async def upstream_error(_request: Request, _exc: Exception):
         return _error(502, "Mail service error", "The mail service is unavailable")
 
-    @app.get("/domains", response_model=HydraDomains)
-    def domains(request: Request):
+    @app.get("/domains", response_model=HydraDomains, response_model_exclude_none=True)
+    def domains(request: Request, page: int = Query(1, ge=1)):
         members = []
         for domain in current_domains(request):
             domain_id = _stable_id("domain", domain)
@@ -242,7 +305,10 @@ def register_public_routes(app: FastAPI) -> None:
                 created_at=_EPOCH,
                 updated_at=_EPOCH,
             ))
-        return HydraDomains(total_items=len(members), member=members)
+        total = len(members)
+        view, search = _collection_metadata("/domains", page, total, 30)
+        start = (page - 1) * 30
+        return HydraDomains(total_items=total, member=members[start:start + 30], view=view, search=search)
 
     @app.get("/domains/{domain_id}", response_model=DomainResource, responses=_ERROR_RESPONSES)
     def domain(request: Request, domain_id: str):
@@ -273,7 +339,7 @@ def register_public_routes(app: FastAPI) -> None:
     @app.post(
         "/token",
         response_model=TokenResponse,
-        responses=_ERROR_RESPONSES,
+        responses=_TOKEN_RESPONSES,
         summary="Issue a passwordless address token",
         description="Validates a whitelisted address and returns a stateless bearer token; no account or password is stored.",
     )
@@ -288,14 +354,25 @@ def register_public_routes(app: FastAPI) -> None:
     def me(address: str = Depends(bearer_address)):
         return _account(address)
 
-    @app.get("/messages", response_model=HydraMessages, responses=_ERROR_RESPONSES)
+    @app.get(
+        "/messages", response_model=HydraMessages, response_model_exclude_none=True,
+        responses=_ERROR_RESPONSES,
+    )
     def messages(request: Request, page: int = Query(1, ge=1), address: str = Depends(bearer_address)):
         settings = request.app.state.state_store.get_settings()
         limit = int(settings["message_limit"])
         account_id = mail_account_id(request)
         total, values = request.app.state.jmap.list_messages(account_id, address, limit, (page - 1) * limit)
         blocked = {str(value).encode("idna").decode("ascii").lower() for value in settings["blocked_sender_domains"]}
-        return HydraMessages(total_items=total, member=[_summary(value, account_id, blocked) for value in values])
+        owned = [value for value in values if _message_belongs_to_address(request, address, value)]
+        safe_total = max(0, total - (len(values) - len(owned)))
+        view, search = _collection_metadata("/messages", page, safe_total, limit)
+        return HydraMessages(
+            total_items=safe_total,
+            member=[_summary(value, account_id, blocked) for value in owned],
+            view=view,
+            search=search,
+        )
 
     @app.get("/messages/{message_id}", response_model=MessageResource, responses=_ERROR_RESPONSES)
     def message(message_id: str, request: Request, address: str = Depends(bearer_address)):
@@ -304,17 +381,12 @@ def register_public_routes(app: FastAPI) -> None:
         blocked = {str(item).encode("idna").decode("ascii").lower() for item in settings["blocked_sender_domains"]}
         return _message(value, account_id, blocked)
 
-    @app.patch("/messages/{message_id}", response_model=MessageResource, responses=_ERROR_RESPONSES)
+    @app.patch("/messages/{message_id}", response_model=SeenPatch, responses=_ERROR_RESPONSES)
     def patch_message(body: SeenPatch, message_id: str, request: Request, address: str = Depends(bearer_address)):
-        account_id, value = message_for_address(request, address, message_id)
+        account_id, _value = message_for_address(request, address, message_id)
         if not request.app.state.jmap.set_seen(account_id, message_id, body.seen):
             raise HTTPException(502, "Could not update message")
-        value = dict(value)
-        value["keywords"] = dict(value.get("keywords") or {})
-        value["keywords"]["$seen"] = body.seen
-        settings = request.app.state.state_store.get_settings()
-        blocked = {str(item).encode("idna").decode("ascii").lower() for item in settings["blocked_sender_domains"]}
-        return _message(value, account_id, blocked)
+        return body
 
     @app.delete("/messages/{message_id}", status_code=204, response_class=Response, responses=_ERROR_RESPONSES)
     def delete_message(message_id: str, request: Request, address: str = Depends(bearer_address)):
@@ -323,7 +395,10 @@ def register_public_routes(app: FastAPI) -> None:
             raise HTTPException(502, "Could not delete message")
         return Response(status_code=204)
 
-    @app.get("/messages/{message_id}/attachments/{blob_id}", responses=_ERROR_RESPONSES)
+    @app.get(
+        "/messages/{message_id}/attachments/{blob_id}", response_class=StreamingResponse,
+        responses=_ATTACHMENT_RESPONSES,
+    )
     def attachment(message_id: str, blob_id: str, request: Request, address: str = Depends(bearer_address)):
         account_id, value = message_for_address(request, address, message_id)
         match = next((item for item in value.get("attachments") or [] if item.get("blobId") == blob_id), None)
@@ -333,7 +408,7 @@ def register_public_routes(app: FastAPI) -> None:
         content, content_type = request.app.state.jmap.download_blob(account_id, blob_id, name)
         return StreamingResponse(iter([content]), media_type=content_type, headers=_download_headers(name))
 
-    @app.get("/sources/{message_id}", responses=_ERROR_RESPONSES)
+    @app.get("/sources/{message_id}", response_class=StreamingResponse, responses=_SOURCE_RESPONSES)
     def source(message_id: str, request: Request, address: str = Depends(bearer_address)):
         account_id, value = message_for_address(request, address, message_id)
         blob_id = value.get("blobId")
@@ -357,24 +432,14 @@ def create_app(config_path: str) -> FastAPI:
     app.state.signer = signer
     app.state.jmap = JmapClient(cfg.jmap_url, cfg.jmap_token, cfg.catchall_address)
 
-    windows: dict[str, tuple[float, int]] = {}
-    rate_lock = threading.Lock()
+    limiter = _FixedWindowLimiter(limit=10, seconds=60)
 
     @app.middleware("http")
     async def security(request: Request, call_next):
         if request.url.path in {"/token", "/admin/login"}:
             client_ip = request.client.host if request.client else "unknown"
-            now = time.monotonic()
-            with rate_lock:
-                started, count = windows.get(client_ip, (now, 0))
-                if now - started >= 60:
-                    started, count = now, 0
-                if count >= 10:
-                    response = _error(429, "Too many requests", "Try again later")
-                else:
-                    windows[client_ip] = (started, count + 1)
-                    response = None
-            if response is not None:
+            if not limiter.allow((request.url.path, client_ip)):
+                response = _error(429, "Too many requests", "Try again later")
                 _set_security_headers(request, response)
                 return response
         response = await call_next(request)
@@ -393,6 +458,13 @@ def _set_security_headers(request: Request, response: Response) -> None:
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https://cdn.jsdelivr.net; "
+            "frame-ancestors 'none'"
+        )
+    elif request.url.path == "/redoc":
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src https://fonts.gstatic.com; img-src 'self' https://fastapi.tiangolo.com; "
             "frame-ancestors 'none'"
         )
     else:

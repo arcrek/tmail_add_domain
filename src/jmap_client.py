@@ -11,12 +11,11 @@ _USING = ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"]
 _MAIL_USING = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"]
 _MAIL_CAPABILITY = "urn:ietf:params:jmap:mail"
 _SUMMARY_PROPERTIES = [
-    "id", "blobId", "threadId", "from", "to", "subject", "preview", "keywords",
-    "hasAttachment", "size", "receivedAt",
+    "id", "blobId", "threadId", "from", "to", "cc", "bcc", "subject", "preview", "keywords",
+    "hasAttachment", "size", "receivedAt", "header:Delivered-To:asAddresses",
 ]
 _MESSAGE_PROPERTIES = _SUMMARY_PROPERTIES + [
-    "cc", "bcc", "bodyValues", "textBody", "htmlBody", "attachments", "bodyStructure",
-    "header:Delivered-To:asAddresses",
+    "bodyValues", "textBody", "htmlBody", "attachments", "bodyStructure",
 ]
 
 class JmapClient:

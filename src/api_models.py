@@ -70,6 +70,8 @@ class AttachmentResource(_Resource):
     filename: str
     content_type: str = Field(alias="contentType")
     disposition: str
+    transfer_encoding: str = Field(alias="transferEncoding")
+    related: bool
     size: int
     download_url: str = Field(alias="downloadUrl")
 
@@ -90,16 +92,44 @@ class MessageSummary(_Resource):
 
 
 class MessageResource(MessageSummary):
-    cc: list[EmailAddress] = []
-    bcc: list[EmailAddress] = []
+    cc: list[EmailAddress] = Field(default_factory=list)
+    bcc: list[EmailAddress] = Field(default_factory=list)
     flagged: bool = False
+    verifications: list[str] = Field(default_factory=list)
+    retention: bool = False
+    retention_date: datetime | None = Field(default=None, alias="retentionDate")
     text: str = ""
-    html: list[str] = []
-    attachments: list[AttachmentResource] = []
+    html: list[str] = Field(default_factory=list)
+    attachments: list[AttachmentResource] = Field(default_factory=list)
 
 
 class SeenPatch(ApiModel):
     seen: bool
+
+
+class HydraView(ApiModel):
+    iri: str = Field(alias="@id")
+    type: str = Field(default="hydra:PartialCollectionView", alias="@type")
+    first: str = Field(alias="hydra:first")
+    last: str = Field(alias="hydra:last")
+    previous: str | None = Field(default=None, alias="hydra:previous")
+    next: str | None = Field(default=None, alias="hydra:next")
+
+
+class HydraSearchMapping(ApiModel):
+    type: str = Field(default="IriTemplateMapping", alias="@type")
+    variable: str = "page"
+    property: str = "page"
+    required: bool = False
+
+
+class HydraSearch(ApiModel):
+    type: str = Field(default="hydra:IriTemplate", alias="@type")
+    template: str = Field(alias="hydra:template")
+    variable_representation: str = Field(default="BasicRepresentation", alias="hydra:variableRepresentation")
+    mapping: list[HydraSearchMapping] = Field(
+        default_factory=lambda: [HydraSearchMapping()], alias="hydra:mapping"
+    )
 
 
 class HydraDomains(ApiModel):
@@ -108,6 +138,8 @@ class HydraDomains(ApiModel):
     type: str = Field(default="hydra:Collection", alias="@type")
     total_items: int = Field(alias="hydra:totalItems")
     member: list[DomainResource] = Field(alias="hydra:member")
+    view: HydraView = Field(alias="hydra:view")
+    search: HydraSearch = Field(alias="hydra:search")
 
 
 class HydraMessages(ApiModel):
@@ -116,6 +148,8 @@ class HydraMessages(ApiModel):
     type: str = Field(default="hydra:Collection", alias="@type")
     total_items: int = Field(alias="hydra:totalItems")
     member: list[MessageSummary] = Field(alias="hydra:member")
+    view: HydraView = Field(alias="hydra:view")
+    search: HydraSearch = Field(alias="hydra:search")
 
 
 class HydraError(ApiModel):

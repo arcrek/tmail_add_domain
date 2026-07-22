@@ -7,7 +7,9 @@ from unittest.mock import MagicMock, call
 import pytest
 from fastapi.testclient import TestClient
 
+from src import api_server
 from src.api_server import create_app
+from src.jmap_client import _SUMMARY_PROPERTIES
 
 
 MESSAGE = {
@@ -24,6 +26,9 @@ MESSAGE = {
     "hasAttachment": True,
     "size": 321,
     "receivedAt": "2026-07-22T12:00:00Z",
+    "verifications": ["dkim"],
+    "retention": True,
+    "retentionDate": "2026-08-22T12:00:00Z",
     "bodyValues": {
         "plain": {"value": "Plain body"},
         "markup": {"value": "<p>HTML body</p>"},
@@ -36,6 +41,8 @@ MESSAGE = {
         "type": "text/plain",
         "size": 7,
         "disposition": "attachment",
+        "transferEncoding": "base64",
+        "related": True,
     }],
     "header:Delivered-To:asAddresses": [],
 }
@@ -94,6 +101,10 @@ def test_domains_are_a_hydra_collection(client):
     body = response.json()
     assert body["@type"] == "hydra:Collection"
     assert body["hydra:member"][0]["domain"] == "example.com"
+    assert body["hydra:view"]["@type"] == "hydra:PartialCollectionView"
+    assert body["hydra:view"]["hydra:first"] == "/domains?page=1"
+    assert body["hydra:search"]["hydra:template"] == "/domains{?page}"
+    assert body["hydra:search"]["hydra:mapping"][0]["variable"] == "page"
 
 
 def test_passwordless_token_and_me(client):
@@ -130,9 +141,31 @@ def test_messages_require_bearer_and_return_hydra(client, bearer):
 
 def test_message_pagination_uses_configured_limit(client, bearer, fake_jmap):
     client.app.state.state_store.update_settings({"message_limit": 7})
+    fake_jmap.list_messages.return_value = (15, [dict(MESSAGE)])
     response = client.get("/messages?page=3", headers=bearer)
     assert response.status_code == 200
     fake_jmap.list_messages.assert_called_once_with("mail-account", "box@example.com", 7, 14)
+    assert response.json()["hydra:view"] == {
+        "@id": "/messages?page=3",
+        "@type": "hydra:PartialCollectionView",
+        "hydra:first": "/messages?page=1",
+        "hydra:last": "/messages?page=3",
+        "hydra:previous": "/messages?page=2",
+    }
+    assert response.json()["hydra:search"]["hydra:template"] == "/messages{?page}"
+
+
+def test_messages_filter_jmap_overreturn_before_serialization(client, bearer, fake_jmap):
+    foreign = dict(MESSAGE, id="foreign-secret", to=[{"email": "other@example.com"}])
+    fake_jmap.list_messages.return_value = (2, [dict(MESSAGE), foreign])
+    body = client.get("/messages", headers=bearer).json()
+    assert [message["id"] for message in body["hydra:member"]] == ["m1"]
+    assert body["hydra:totalItems"] == 1
+    assert "foreign-secret" not in json.dumps(body)
+
+
+def test_jmap_summary_projection_contains_local_ownership_fields():
+    assert {"to", "cc", "bcc", "header:Delivered-To:asAddresses"} <= set(_SUMMARY_PROPERTIES)
 
 
 def test_message_detail_builds_bodies_and_attachment_links(client, bearer):
@@ -140,6 +173,11 @@ def test_message_detail_builds_bodies_and_attachment_links(client, bearer):
     assert body["text"] == "Plain body"
     assert body["html"] == ["<p>HTML body</p>"]
     assert body["attachments"][0]["downloadUrl"] == "/messages/m1/attachments/attachment-1"
+    assert body["attachments"][0]["transferEncoding"] == "base64"
+    assert body["attachments"][0]["related"] is True
+    assert body["verifications"] == ["dkim"]
+    assert body["retention"] is True
+    assert body["retentionDate"] == "2026-08-22T12:00:00Z"
     assert body["downloadUrl"] == "/sources/m1"
 
 
@@ -176,7 +214,7 @@ def test_message_operations_cannot_cross_recipient(client, bearer, fake_jmap, me
 def test_seen_patch_loads_owner_before_mutating(client, bearer, fake_jmap):
     response = client.patch("/messages/m1", json={"seen": True}, headers=bearer)
     assert response.status_code == 200
-    assert response.json()["seen"] is True
+    assert response.json() == {"seen": True}
     assert fake_jmap.method_calls.index(call.get_message("mail-account", "m1")) < fake_jmap.method_calls.index(
         call.set_seen("mail-account", "m1", True)
     )
@@ -246,6 +284,16 @@ def test_security_headers_and_token_rate_limit(client):
     limited = client.post("/token", json={"address": "box@example.com"})
     assert limited.status_code == 429
     assert limited.json()["@type"] == "hydra:Error"
+    assert client.post("/admin/login").status_code == 404
+
+
+def test_redoc_csp_allows_only_generated_redoc_assets(client):
+    csp = client.get("/redoc").headers["content-security-policy"]
+    assert "script-src 'self' https://cdn.jsdelivr.net" in csp
+    assert "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com" in csp
+    assert "font-src https://fonts.gstatic.com" in csp
+    assert "img-src 'self' https://fastapi.tiangolo.com" in csp
+    assert "*" not in csp
 
 
 def test_admin_login_path_is_rate_limited(client):
@@ -256,11 +304,29 @@ def test_admin_login_path_is_rate_limited(client):
     assert limited.json()["@type"] == "hydra:Error"
 
 
+def test_fixed_window_prunes_expired_keys_and_separates_paths(monkeypatch):
+    monkeypatch.setattr(api_server.time, "monotonic", MagicMock(side_effect=[0, 0, 61]))
+    limiter = api_server._FixedWindowLimiter(limit=1, seconds=60)
+    assert limiter.allow(("/token", "192.0.2.1"))
+    assert limiter.allow(("/admin/login", "192.0.2.1"))
+    assert limiter.allow(("/token", "192.0.2.2"))
+    assert set(limiter._windows) == {("/token", "192.0.2.2")}
+
+
 def test_openapi_documents_passwordless_bearer_contract(client):
     schema = client.get("/openapi.json").json()
     assert "/token" in schema["paths"]
     assert "/messages/{message_id}" in schema["paths"]
     assert schema["paths"]["/messages"]["get"]["security"] == [{"HTTPBearer": []}]
+    assert "429" in schema["paths"]["/token"]["post"]["responses"]
+    attachment = schema["paths"]["/messages/{message_id}/attachments/{blob_id}"]["get"]
+    assert attachment["responses"]["200"]["content"]["application/octet-stream"]["schema"] == {
+        "type": "string", "format": "binary",
+    }
+    source = schema["paths"]["/sources/{message_id}"]["get"]
+    assert source["responses"]["200"]["content"]["message/rfc822"]["schema"] == {
+        "type": "string", "format": "binary",
+    }
     address_schema = schema["components"]["schemas"]["AddressRequest"]
     assert set(address_schema["properties"]) == {"address"}
     assert "box@example.com" in json.dumps(address_schema)
