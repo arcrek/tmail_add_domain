@@ -61,6 +61,44 @@ def test_missing_or_corrupt_reload_retains_last_valid_snapshot(tmp_path):
     cache.load()
     assert cache.domains() == ["last-valid.example"]
 
+
+def test_contains_refreshes_when_another_instance_replaces_domains(tmp_path):
+    path = tmp_path / "domains.json"
+    path.write_text('["removed.example"]')
+    policy = DomainCache(str(path))
+    policy.load()
+    authoritative = DomainCache(str(path))
+    authoritative.load()
+
+    authoritative.replace(["added.example"])
+
+    assert not policy.contains("removed.example")
+    assert policy.contains("added.example")
+
+
+def test_contains_retains_last_valid_snapshot_for_missing_or_corrupt_refresh(tmp_path):
+    path = tmp_path / "domains.json"
+    path.write_text('["last-valid.example"]')
+    cache = DomainCache(str(path))
+    cache.load()
+
+    path.unlink()
+    assert cache.contains("last-valid.example")
+    path.write_text("not json")
+    assert cache.contains("last-valid.example")
+
+
+def test_contains_unchanged_generation_avoids_file_lock(tmp_path, monkeypatch):
+    path = tmp_path / "domains.json"
+    path.write_text('["cached.example"]')
+    cache = DomainCache(str(path))
+    cache.load()
+    flock = MagicMock()
+    monkeypatch.setattr("src.domain_cache.fcntl.flock", flock)
+
+    assert cache.contains("cached.example")
+    flock.assert_not_called()
+
 def test_no_tmp_file_left_after_write(tmp_path):
     path = str(tmp_path / "domains.json")
     cache = DomainCache(path)

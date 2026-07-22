@@ -12,8 +12,9 @@ from urllib.parse import quote
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.staticfiles import StaticFiles
 
@@ -70,6 +71,24 @@ _SOURCE_RESPONSES = {
 }
 _PUBLIC_BODY_LIMIT = 8 * 1024
 _ADMIN_SETTINGS_BODY_LIMIT = 4 * 1024 * 1024
+_SANDBOX_DOCUMENT = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Sandboxed content</title></head><body>
+<script>
+"use strict";
+addEventListener("message", (event) => {
+  const value = event.data;
+  if (event.source !== parent || !value || value.type !== "tmail:sandbox-content") return;
+  if (typeof value.html !== "string" || typeof value.css !== "string") return;
+  if (value.mode !== "content") return;
+  document.open();
+  document.write(`<!doctype html><html><head><base target="_blank"><style>${value.css}</style></head><body>`);
+  document.write(value.html);
+  document.write("</body></html>");
+  document.close();
+}, {once: true});
+</script>
+</body></html>
+"""
 
 
 class _BodyLimitMiddleware:
@@ -99,30 +118,45 @@ class _BodyLimitMiddleware:
             await self._reject(scope, receive, send)
             return
 
-        received = 0
-        oversized = False
-
-        async def limited_receive():
-            nonlocal received, oversized
+        body = bytearray()
+        saw_request = False
+        complete = False
+        terminal = None
+        while True:
             message = await receive()
-            if message["type"] == "http.request":
-                received += len(message.get("body", b""))
-                if received > limit:
-                    oversized = True
-                    return {"type": "http.request", "body": b"", "more_body": False}
-            return message
+            if message["type"] != "http.request":
+                terminal = message
+                break
+            saw_request = True
+            chunk = message.get("body", b"")
+            remaining = limit + 1 - len(body)
+            body.extend(chunk[:remaining])
+            if len(body) > limit or len(chunk) > remaining:
+                await self._reject(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                complete = True
+                break
 
-        pending = []
+        replayed = False
 
-        async def buffered_send(message):
-            pending.append(message)
+        async def buffered_receive():
+            nonlocal replayed, terminal
+            if not replayed:
+                replayed = True
+                if saw_request:
+                    return {
+                        "type": "http.request",
+                        "body": bytes(body),
+                        "more_body": not complete,
+                    }
+            if terminal is not None:
+                message = terminal
+                terminal = None
+                return message
+            return await receive()
 
-        await self.app(scope, limited_receive, buffered_send)
-        if oversized:
-            await self._reject(scope, receive, send)
-            return
-        for message in pending:
-            await send(message)
+        await self.app(scope, buffered_receive, send)
 
     @staticmethod
     async def _reject(scope, receive, send):
@@ -513,7 +547,8 @@ def register_public_routes(app: FastAPI) -> None:
             account_id, blob_id, name, content_type
         )
         return StreamingResponse(
-            content, media_type=content_type, headers=_download_headers(name)
+            content, media_type=content_type, headers=_download_headers(name),
+            background=BackgroundTask(content.close),
         )
 
     @app.get("/sources/{message_id}", response_class=StreamingResponse, responses=_SOURCE_RESPONSES)
@@ -527,7 +562,10 @@ def register_public_routes(app: FastAPI) -> None:
         content, _content_type = jmap.download_blob(
             account_id, str(blob_id), name, "message/rfc822"
         )
-        return StreamingResponse(content, media_type="message/rfc822", headers=_download_headers(name))
+        return StreamingResponse(
+            content, media_type="message/rfc822", headers=_download_headers(name),
+            background=BackgroundTask(content.close),
+        )
 
 
 def create_app(config_path: str) -> FastAPI:
@@ -581,6 +619,10 @@ def create_app(config_path: str) -> FastAPI:
     def spa_admin():
         return spa_index()
 
+    @app.get("/sandbox", include_in_schema=False, response_class=HTMLResponse)
+    def sandbox_document():
+        return HTMLResponse(_SANDBOX_DOCUMENT)
+
     @app.get("/{address}", include_in_schema=False)
     def spa_address(address: str, request: Request):
         if address in _POST_ONLY_ROUTES:
@@ -600,8 +642,13 @@ def create_app(config_path: str) -> FastAPI:
 def _set_security_headers(request: Request, response: Response) -> None:
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["X-Frame-Options"] = "DENY"
-    if request.url.path == "/docs":
+    response.headers["X-Frame-Options"] = "SAMEORIGIN" if request.url.path == "/sandbox" else "DENY"
+    if request.url.path == "/sandbox":
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+            "img-src data: https: http:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+        )
+    elif request.url.path == "/docs":
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https://cdn.jsdelivr.net; "
@@ -615,7 +662,10 @@ def _set_security_headers(request: Request, response: Response) -> None:
             "frame-ancestors 'none'"
         )
     else:
-        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; img-src 'self' data:; frame-src 'self'; "
+            "frame-ancestors 'none'"
+        )
 
 
 def main() -> None:

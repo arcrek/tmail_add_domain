@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from src import admin_api
 from src.api_server import create_app
 from src.domain_cache import DomainCache
 from src.jmap_client import JmapUpstreamError
@@ -120,6 +121,25 @@ def test_admin_json_rejects_oversized_declared_body_before_parsing(admin_client)
     assert response.json() == {"detail": "Request body too large"}
 
 
+def test_oversized_trailing_chunk_cannot_mutate_settings_or_config(admin_client, config_path):
+    before_site = admin_client.app.state.state_store.get_settings()
+    before_config = config_path.read_text()
+    valid_prefix = json.dumps({
+        "site": {"appName": "Changed"},
+        "mailServer": {"jmapUrl": "https://changed.example/jmap"},
+    }).encode()
+
+    response = admin_client.put(
+        "/admin/api/settings",
+        content=iter([valid_prefix, b" " * (4 * 1024 * 1024)]),
+        headers={**admin_client.csrf, "content-type": "application/json", "transfer-encoding": "chunked"},
+    )
+
+    assert response.status_code == 413
+    assert admin_client.app.state.state_store.get_settings() == before_site
+    assert config_path.read_text() == before_config
+
+
 def test_csrf_mismatch_is_rejected(admin_client):
     response = admin_client.post(
         "/admin/api/sync-domains", headers={"X-CSRF-Token": "wrong"}
@@ -200,6 +220,31 @@ def test_html_ad_setting_round_trip(admin_client):
     assert response.status_code == 200
     site = admin_client.get("/admin/api/settings").json()["site"]
     assert {key: site[key] for key in values} == values
+
+
+def test_aggregate_settings_payload_accepts_below_cap_and_rejects_above_it(admin_client):
+    def payload_at_size(size):
+        slots = {str(index): "x" * 100_000 for index in range(37)}
+        body = {"site": {"adSlots": slots}}
+        slots["tail"] = ""
+        current = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode())
+        slots["tail"] = "x" * (size - current)
+        assert len(slots["tail"]) <= admin_api.MAX_CONTENT_LENGTH
+        assert len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()) == size
+        return body
+
+    below = payload_at_size(admin_api.MAX_SETTINGS_PAYLOAD_BYTES)
+    accepted = admin_client.put(
+        "/admin/api/settings", json=below, headers=admin_client.csrf
+    )
+    assert accepted.status_code == 200
+
+    above = payload_at_size(admin_api.MAX_SETTINGS_PAYLOAD_BYTES + 1)
+    rejected = admin_client.put(
+        "/admin/api/settings", json=above, headers=admin_client.csrf
+    )
+    assert rejected.status_code == 422
+    assert "aggregate" in rejected.text.lower()
 
 
 def test_disabling_sync_freezes_current_whitelist(admin_client):

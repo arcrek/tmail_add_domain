@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
   html: string
@@ -15,16 +15,38 @@ const sandbox = computed(() => props.mode === 'message'
   ? 'allow-popups allow-popups-to-escape-sandbox'
   : 'allow-scripts allow-popups allow-popups-to-escape-sandbox')
 
-const srcdoc = computed(() => props.mode === 'message'
+const frame = ref<HTMLIFrameElement | null>(null)
+const revision = ref(0)
+const sourceUrl = computed(() => `/sandbox?revision=${revision.value}`)
+const messageSource = computed(() => props.mode === 'message'
   ? `<base target="_blank">${props.html}`
-  : `<!doctype html><html><head><base target="_blank"><style>${props.css}</style></head><body>${props.html}</body></html>`)
+  : undefined)
+
+watch(
+  () => [props.html, props.css, props.mode] as const,
+  () => { revision.value += 1 },
+)
+
+function sendContent(): void {
+  if (props.mode !== 'content') return
+  frame.value?.contentWindow?.postMessage({
+    type: 'tmail:sandbox-content',
+    html: props.html,
+    css: props.css,
+    mode: props.mode,
+  }, '*')
+}
 </script>
 
 <template>
   <iframe
+    :key="revision"
+    ref="frame"
     class="sandbox-frame"
     :sandbox="sandbox"
-    :srcdoc="srcdoc"
+    :src="mode === 'content' ? sourceUrl : undefined"
+    :srcdoc="messageSource"
     :title="title || (mode === 'message' ? 'Message content' : 'Site content')"
+    @load="sendContent"
   />
 </template>

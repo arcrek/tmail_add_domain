@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from types import SimpleNamespace
@@ -81,7 +82,7 @@ def fake_jmap():
     fake.set_seen.return_value = True
     fake.delete_message.return_value = True
     fake.download_blob.side_effect = lambda _account, _blob, _name, content_type: (
-        iter([b"pay", b"load"]), content_type
+        (chunk for chunk in (b"pay", b"load")), content_type
     )
     return fake
 
@@ -302,6 +303,36 @@ def test_attachment_and_source_stream_after_owner_check(client, bearer, fake_jma
     ]
 
 
+def test_blob_download_failure_is_sanitized_before_streaming(client, bearer, fake_jmap):
+    fake_jmap.download_blob.side_effect = RuntimeError("private upstream detail")
+
+    response = client.get("/sources/m1", headers=bearer)
+
+    assert response.status_code == 502
+    assert "private upstream detail" not in response.text
+
+
+def test_blob_stream_background_cleanup_runs_after_response(client, bearer, fake_jmap):
+    class ClosableStream:
+        def __init__(self):
+            self._chunks = iter([b"payload"])
+            self.close = MagicMock()
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self._chunks)
+
+    stream = ClosableStream()
+    fake_jmap.download_blob.side_effect = lambda *_args: (stream, "message/rfc822")
+
+    response = client.get("/sources/m1", headers=bearer)
+
+    assert response.status_code == 200
+    stream.close.assert_called_once_with()
+
+
 def test_unknown_attachment_is_not_downloaded(client, bearer, fake_jmap):
     assert client.get("/messages/m1/attachments/guessed", headers=bearer).status_code == 404
     fake_jmap.download_blob.assert_not_called()
@@ -361,6 +392,67 @@ def test_token_rejects_oversized_stream_with_missing_or_deceptive_length(client,
     assert response.json()["@type"] == "hydra:Error"
 
 
+def test_body_limit_reads_trailing_chunks_before_dispatching_mutating_app():
+    mutations = []
+    sent = []
+    chunks = iter([
+        {"type": "http.request", "body": b'{"site":{"appName":"Changed"}}', "more_body": True},
+        {"type": "http.request", "body": b" " * api_server._ADMIN_SETTINGS_BODY_LIMIT, "more_body": False},
+    ])
+
+    async def receive():
+        return next(chunks)
+
+    async def send(message):
+        sent.append(message)
+
+    async def mutating_app(_scope, downstream_receive, downstream_send):
+        first = await downstream_receive()
+        json.loads(first["body"])
+        mutations.append("changed")
+        await downstream_send({"type": "http.response.start", "status": 204, "headers": []})
+        await downstream_send({"type": "http.response.body", "body": b""})
+
+    scope = {
+        "type": "http", "method": "PUT", "path": "/admin/api/settings",
+        "headers": [], "http_version": "1.1", "scheme": "https",
+        "query_string": b"", "root_path": "", "server": ("testserver", 443),
+        "client": ("127.0.0.1", 1234),
+    }
+
+    asyncio.run(api_server._BodyLimitMiddleware(mutating_app)(scope, receive, send))
+
+    assert mutations == []
+    assert sent[0]["status"] == 413
+
+
+def test_body_limit_replays_empty_requests_and_disconnects_faithfully():
+    async def exercise(upstream):
+        messages = iter(upstream)
+        observed = []
+
+        async def receive():
+            return next(messages)
+
+        async def send(_message):
+            pass
+
+        async def app(_scope, downstream_receive, _send):
+            observed.append(await downstream_receive())
+
+        scope = {"type": "http", "method": "POST", "path": "/token", "headers": []}
+        await api_server._BodyLimitMiddleware(app)(scope, receive, send)
+        return observed
+
+    empty = asyncio.run(exercise([
+        {"type": "http.request", "body": b"", "more_body": False},
+    ]))
+    disconnected = asyncio.run(exercise([{"type": "http.disconnect"}]))
+
+    assert empty == [{"type": "http.request", "body": b"", "more_body": False}]
+    assert disconnected == [{"type": "http.disconnect"}]
+
+
 def test_security_headers_and_token_rate_limit(client):
     response = client.get("/docs")
     assert response.headers["x-content-type-options"] == "nosniff"
@@ -373,6 +465,29 @@ def test_security_headers_and_token_rate_limit(client):
     assert limited.status_code == 429
     assert limited.json()["@type"] == "hydra:Error"
     assert client.post("/admin/login").status_code == 404
+
+
+def test_spa_csp_allows_data_images_and_sandbox_frames_without_inline_parent_code(client):
+    csp = client.get("/").headers["content-security-policy"]
+
+    assert "img-src 'self' data:" in csp
+    assert "frame-src 'self'" in csp
+    assert "unsafe-inline" not in csp
+
+
+def test_sandbox_document_has_isolated_inline_policy_and_bootstrap(client):
+    response = client.get("/sandbox")
+    csp = response.headers["content-security-policy"]
+
+    assert response.status_code == 200
+    assert response.headers["x-frame-options"] == "SAMEORIGIN"
+    assert "script-src 'unsafe-inline'" in csp
+    assert "style-src 'unsafe-inline'" in csp
+    assert "frame-ancestors 'self'" in csp
+    assert "default-src 'none'" in csp
+    assert "script-src 'unsafe-inline' https:" not in csp
+    assert "connect-src" not in csp
+    assert "tmail:sandbox-content" in response.text
 
 
 def test_redoc_csp_allows_only_generated_redoc_assets(client):

@@ -142,7 +142,8 @@ def test_download_blob_substitutes_type_and_streams_inside_owned_context():
         "mail-account", "b1", "message.eml", "message/rfc822"
     )
 
-    assert events == []
+    assert events[1:3] == ["entered", "status"]
+    assert b"ra" not in events
     assert b"".join(chunks) == b"raw"
     assert content_type == "message/rfc822"
     assert events[0][0:2] == (
@@ -150,6 +151,98 @@ def test_download_blob_substitutes_type_and_streams_inside_owned_context():
         "https://mail.example/download/mail-account/b1/message.eml?type=message%2Frfc822",
     )
     assert events[-1] == "closed"
+
+
+def test_download_blob_closes_preopened_stream_when_status_fails():
+    events = []
+
+    class FailedResponse:
+        def raise_for_status(self):
+            raise RuntimeError("private upstream detail")
+
+    class StreamingClient:
+        def get(self, *_args, **_kwargs):
+            return response({"downloadUrl": "https://mail.example/download/{blobId}"})
+
+        @contextmanager
+        def stream(self, *_args, **_kwargs):
+            try:
+                yield FailedResponse()
+            finally:
+                events.append("closed")
+
+    client = JmapClient("https://mail.example/jmap", "token", "admin@example.com", StreamingClient())
+
+    with pytest.raises(JmapUpstreamError, match="JMAP upstream request failed"):
+        client.download_blob("mail-account", "b1", "name")
+
+    assert events == ["closed"]
+
+
+def test_download_blob_consumes_lazily_and_early_close_releases_stream():
+    events = []
+
+    class StreamResponse:
+        def raise_for_status(self):
+            events.append("status")
+
+        def iter_bytes(self):
+            events.append("first chunk")
+            yield b"first"
+            events.append("second chunk")
+            yield b"second"
+
+    class StreamingClient:
+        def get(self, *_args, **_kwargs):
+            return response({"downloadUrl": "https://mail.example/download/{blobId}"})
+
+        @contextmanager
+        def stream(self, *_args, **_kwargs):
+            try:
+                events.append("entered")
+                yield StreamResponse()
+            finally:
+                events.append("closed")
+
+    client = JmapClient("https://mail.example/jmap", "token", "admin@example.com", StreamingClient())
+    chunks, _ = client.download_blob("mail-account", "b1", "name")
+
+    assert events == ["entered", "status"]
+    assert next(chunks) == b"first"
+    assert events == ["entered", "status", "first chunk"]
+    chunks.close()
+    assert events[-1] == "closed"
+
+
+def test_download_blob_closes_and_sanitizes_iteration_errors():
+    events = []
+
+    class StreamResponse:
+        def raise_for_status(self):
+            pass
+
+        def iter_bytes(self):
+            yield b"first"
+            raise RuntimeError("private upstream detail")
+
+    class StreamingClient:
+        def get(self, *_args, **_kwargs):
+            return response({"downloadUrl": "https://mail.example/download/{blobId}"})
+
+        @contextmanager
+        def stream(self, *_args, **_kwargs):
+            try:
+                yield StreamResponse()
+            finally:
+                events.append("closed")
+
+    client = JmapClient("https://mail.example/jmap", "token", "admin@example.com", StreamingClient())
+    chunks, _ = client.download_blob("mail-account", "b1", "name")
+
+    assert next(chunks) == b"first"
+    with pytest.raises(JmapUpstreamError, match="JMAP upstream request failed"):
+        next(chunks)
+    assert events == ["closed"]
 
 
 @pytest.mark.parametrize("method_response", [

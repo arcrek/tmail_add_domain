@@ -4,6 +4,7 @@ import base64
 import binascii
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import re
 import secrets
 from urllib.parse import urlsplit
@@ -25,6 +26,8 @@ MAIL_KEYS = {"jmap_url", "jmap_token", "catchall_address", "mail_account_id", "r
 MASKED_SECRET = "********"
 MAX_IMAGE_BYTES = 1024 * 1024
 MAX_CONTENT_LENGTH = 100_000
+# Leave room for transport whitespace and framing beneath the 4 MiB ASGI body limit.
+MAX_SETTINGS_PAYLOAD_BYTES = 3_750_000
 
 router = APIRouter(prefix="/admin/api", tags=["admin"])
 
@@ -233,6 +236,9 @@ def update_settings(
     body: dict[str, object] = Body(...),
     _session_value: dict[str, object] = Depends(_csrf),
 ):
+    payload_size = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode())
+    if payload_size > MAX_SETTINGS_PAYLOAD_BYTES:
+        raise HTTPException(422, "Aggregate settings payload exceeds the size limit")
     if set(body) - {"site", "mailServer"}:
         raise HTTPException(422, "Unknown settings section")
     site_updates = _section(body, "site", SITE_KEYS)

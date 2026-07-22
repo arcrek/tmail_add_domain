@@ -90,8 +90,8 @@ describe('address flow', () => {
     expect(mocks.site).toHaveBeenCalledTimes(1)
     const frames = wrapper.findAll('iframe.site-content-frame')
     expect(frames).toHaveLength(3)
-    expect(frames[0]?.attributes('srcdoc')).toContain('<strong>Configured header</strong>')
-    expect(frames[2]?.attributes('srcdoc')).toContain('<small>Configured footer</small>')
+    expect(frames.every((frame) => frame.attributes('src') === '/sandbox?revision=0')).toBe(true)
+    expect(frames.every((frame) => frame.attributes('srcdoc') === undefined)).toBe(true)
     expect(frames[1]?.attributes('sandbox')).toContain('allow-scripts')
     expect(frames[1]?.attributes('sandbox')).not.toContain('allow-same-origin')
     expect(wrapper.text()).not.toContain('Configured header')
@@ -100,6 +100,7 @@ describe('address flow', () => {
   it('applies and cleans up configured branding, language, favicon, and cookie notice', async () => {
     const root = document.documentElement
     const originalLanguage = root.lang
+    const originalTitle = document.title
     root.style.setProperty('--primary', '#111111')
     root.style.setProperty('--accent', '#222222')
     const favicon = document.createElement('link')
@@ -132,12 +133,14 @@ describe('address flow', () => {
     expect(root.style.getPropertyValue('--primary')).toBe('#123456')
     expect(root.style.getPropertyValue('--accent')).toBe('#654321')
     expect(root.lang).toBe('de')
+    expect(document.title).toBe('Configured Mail')
     expect(favicon.getAttribute('href')).toBe('data:image/png;base64,aWNvbg==')
 
     wrapper.unmount()
     expect(root.style.getPropertyValue('--primary')).toBe('#111111')
     expect(root.style.getPropertyValue('--accent')).toBe('#222222')
     expect(root.lang).toBe(originalLanguage)
+    expect(document.title).toBe(originalTitle)
     expect(favicon.getAttribute('href')).toBe('/original.ico')
     favicon.remove()
     root.style.removeProperty('--primary')

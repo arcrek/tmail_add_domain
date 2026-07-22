@@ -23,6 +23,7 @@ const root = document.documentElement
 const originalLanguage = root.getAttribute('lang')
 const originalPrimary = root.style.getPropertyValue('--primary')
 const originalAccent = root.style.getPropertyValue('--accent')
+const originalTitle = document.title
 const originalFavicon = document.head.querySelector<HTMLLinkElement>('link[rel~="icon"]')
 const originalFaviconHref = originalFavicon?.getAttribute('href') ?? null
 let favicon = originalFavicon
@@ -36,6 +37,7 @@ function applySite(value: SiteResource | null): void {
   root.style.setProperty('--primary', value.primaryColor)
   root.style.setProperty('--accent', value.accentColor)
   root.lang = value.language
+  document.title = value.appName
   if (value.faviconDataUrl) {
     if (!favicon) {
       favicon = document.createElement('link')
@@ -62,6 +64,7 @@ function cleanupSite(): void {
   else root.style.removeProperty('--accent')
   if (originalLanguage === null) root.removeAttribute('lang')
   else root.setAttribute('lang', originalLanguage)
+  document.title = originalTitle
   if (createdFavicon) favicon?.remove()
   else if (originalFavicon) {
     if (originalFaviconHref === null) originalFavicon.removeAttribute('href')

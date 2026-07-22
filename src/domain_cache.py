@@ -14,6 +14,7 @@ class DomainCache:
         self._lock_file = self._file + ".lock"
         self._lock = threading.RLock()
         self._domains: set[str] = set()
+        self._generation: tuple[int, int, int, int] | None = None
 
     @contextmanager
     def _file_locked(self):
@@ -40,8 +41,14 @@ class DomainCache:
             domains = self._read()
             if domains is not None:
                 self._domains = domains
+            self._generation = self._file_generation()
 
     def contains(self, domain: str) -> bool:
+        current_generation = self._file_generation()
+        with self._lock:
+            if current_generation == self._generation:
+                return domain in self._domains
+        self.load()
         with self._lock:
             return domain in self._domains
 
@@ -54,11 +61,9 @@ class DomainCache:
             domains = self._read()
             if domains is not None:
                 self._domains = domains
-            try:
-                stat = os.stat(self._file)
-            except OSError:
-                return 0, 0, 0, 0
-            return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+            generation = self._file_generation()
+            self._generation = generation
+            return generation
 
     def add(self, domain: str) -> None:
         self.add_many([domain])
@@ -70,6 +75,7 @@ class DomainCache:
             merged.update(domains)
             self._persist(merged)
             self._domains = merged
+            self._generation = self._file_generation()
 
     def replace(
         self,
@@ -79,19 +85,24 @@ class DomainCache:
         replacement = set(domains)
         with self._lock, self._file_locked():
             if expected_generation is not None:
-                try:
-                    stat = os.stat(self._file)
-                    current_generation = stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
-                except OSError:
-                    current_generation = (0, 0, 0, 0)
+                current_generation = self._file_generation()
                 if current_generation != expected_generation:
                     current = self._read()
                     if current is not None:
                         self._domains = current
+                    self._generation = current_generation
                     return False
             self._persist(replacement)
             self._domains = replacement
+            self._generation = self._file_generation()
             return True
+
+    def _file_generation(self) -> tuple[int, int, int, int]:
+        try:
+            stat = os.stat(self._file)
+        except OSError:
+            return 0, 0, 0, 0
+        return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
 
     def _persist(self, domains: set[str]) -> None:
         directory = os.path.dirname(self._file)

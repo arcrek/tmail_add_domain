@@ -108,6 +108,7 @@ describe('MessageReader', () => {
     expect(mocks.message).toHaveBeenCalledWith('signed', 'one')
     expect(mocks.setSeen).toHaveBeenCalledWith('signed', 'one', true)
     expect(wrapper.get('iframe').attributes('sandbox')).not.toContain('allow-scripts')
+    expect(wrapper.get('iframe').attributes('src')).toBeUndefined()
     expect(wrapper.get('iframe').attributes('srcdoc')).toContain('<p>HTML body</p>')
   })
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from collections.abc import Iterator
+from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 import logging
 from urllib.parse import quote
@@ -23,6 +24,46 @@ _MESSAGE_PROPERTIES = _SUMMARY_PROPERTIES + [
 class JmapUpstreamError(RuntimeError):
     def __init__(self):
         super().__init__("JMAP upstream request failed")
+
+
+class _BlobStream(Iterator[bytes]):
+    def __init__(self, chunks: Iterator[bytes], resources: ExitStack):
+        self._chunks = chunks
+        self._resources = resources
+        self._closed = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> bytes:
+        if self._closed:
+            raise StopIteration
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            self.close()
+            raise
+        except Exception:
+            try:
+                self.close()
+            except Exception:
+                pass
+            raise JmapUpstreamError() from None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            close = getattr(self._chunks, "close", None)
+            if close is not None:
+                close()
+        except Exception:
+            pass
+        try:
+            self._resources.close()
+        except Exception:
+            raise JmapUpstreamError() from None
 
 
 class JmapClient:
@@ -230,25 +271,22 @@ class JmapClient:
         if "{" in url or "}" in url:
             raise JmapUpstreamError()
 
-        def chunks():
+        resources = ExitStack()
+        try:
+            client = resources.enter_context(httpx.Client()) if self._client is httpx else self._client
+            response = resources.enter_context(client.stream(
+                "GET", url, headers=self._headers, timeout=30
+            ))
+            response.raise_for_status()
+            chunks = iter(response.iter_bytes())
+        except Exception:
             try:
-                if self._client is httpx:
-                    with httpx.Client() as client:
-                        with client.stream(
-                            "GET", url, headers=self._headers, timeout=30
-                        ) as response:
-                            response.raise_for_status()
-                            yield from response.iter_bytes()
-                else:
-                    with self._client.stream(
-                        "GET", url, headers=self._headers, timeout=30
-                    ) as response:
-                        response.raise_for_status()
-                        yield from response.iter_bytes()
+                resources.close()
             except Exception:
-                raise JmapUpstreamError() from None
+                pass
+            raise JmapUpstreamError() from None
 
-        return chunks(), content_type
+        return _BlobStream(chunks, resources), content_type
 
     def message_counts(self, account_id: str) -> dict[str, int]:
         now = datetime.now(timezone.utc)
