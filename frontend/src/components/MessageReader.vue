@@ -74,7 +74,7 @@ async function loadMessage(): Promise<void> {
   }
 }
 
-function safeFilename(value: string): string {
+function safeFilename(value: string, fallback = 'attachment', maxLength = 120): string {
   const basename = value
     .normalize('NFKC')
     .split(/[\\/]/)
@@ -83,14 +83,14 @@ function safeFilename(value: string): string {
     .replace(/[<>:"|?*]/g, '_')
     .replace(/\s+/g, ' ')
     .replace(/^[ .]+|[ .]+$/g, '') || ''
-  if (!basename) return 'attachment'
-  if (basename.length <= 120) return basename
+  if (!basename) return fallback
+  if (basename.length <= maxLength) return basename
 
   const dot = basename.lastIndexOf('.')
   const extension = dot > 0 && /^\.[a-z0-9]{1,15}$/i.test(basename.slice(dot))
     ? basename.slice(dot)
     : ''
-  const stem = basename.slice(0, 120 - extension.length).replace(/[ .]+$/g, '') || 'attachment'
+  const stem = basename.slice(0, maxLength - extension.length).replace(/[ .]+$/g, '') || fallback
   return `${stem}${extension}`
 }
 
@@ -134,7 +134,7 @@ async function downloadSource(): Promise<void> {
   const version = requestVersion
   const token = props.token
   const messageId = current.id
-  const filename = safeFilename(`${messageId}.eml`)
+  const filename = `${safeFilename(messageId, 'message', 116)}.eml`
   const action = 'source'
   busy.value = action
   actionError.value = ''
@@ -233,7 +233,7 @@ onBeforeUnmount(() => { requestVersion += 1 })
         <ul>
           <li v-for="attachment in message.attachments" :key="attachment.id">
             <span>
-              <strong>{{ attachment.filename }}</strong>
+              <strong>{{ safeFilename(attachment.filename) }}</strong>
               <small>{{ formatBytes(attachment.size) }} · {{ attachment.contentType }}</small>
             </span>
             <button

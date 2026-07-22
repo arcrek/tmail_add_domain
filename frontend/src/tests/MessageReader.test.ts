@@ -195,6 +195,9 @@ describe('MessageReader', () => {
     expect(downloadNames[0]).toHaveLength(120)
     expect(downloadNames[0]).toMatch(/\.txt$/)
     expect(downloadNames[0]).not.toMatch(/[\\/\u0000-\u001f\u007f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/)
+    expect(wrapper.get('.attachments strong').text()).toBe(downloadNames[0])
+    expect(wrapper.get('[data-download-attachment]').attributes('aria-label')).toBe(`Download ${downloadNames[0]}`)
+    expect(wrapper.get('.attachments').text()).not.toMatch(/[\u0000-\u001f\u007f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/)
   })
 
   it('uses a safe fallback for an empty attachment basename', async () => {
@@ -215,5 +218,15 @@ describe('MessageReader', () => {
     await flushPromises()
 
     expect(downloadNames).toEqual(['report.eml'])
+  })
+
+  it('uses a message fallback before appending the source extension', async () => {
+    mocks.message.mockResolvedValueOnce(message('../\\\u202e\u0000'))
+    const wrapper = mount(MessageReader, { props: { token: 'signed', id: '../\\\u202e\u0000' } })
+    await flushPromises()
+    await wrapper.get('[data-download-source]').trigger('click')
+    await flushPromises()
+
+    expect(downloadNames).toEqual(['message.eml'])
   })
 })
