@@ -1,0 +1,14 @@
+[Unit]
+Description=Tmail Web API and Frontend
+After=network.target tmail-policy.service
+
+[Service]
+User=tmail-policy
+WorkingDirectory=/opt/tmail-policy
+Environment=TMAIL_CONFIG=/opt/tmail-policy/config.json
+ExecStart=/usr/bin/python3 -m src.api_server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

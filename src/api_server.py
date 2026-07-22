@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import os
 from pathlib import Path
 import threading
 import time
 from urllib.parse import quote
 
+import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.staticfiles import StaticFiles
 
 from src.api_auth import AddressToken, AddressValidationError, active_domains, normalize_address
 from src.admin_api import router as admin_router
@@ -40,6 +43,10 @@ from src.jmap_client import JmapClient
 
 _BEARER = HTTPBearer(auto_error=False)
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_SPA_RESERVED = {
+    "accounts", "admin", "api", "assets", "docs", "domains", "favicon.ico", "me",
+    "messages", "openapi.json", "redoc", "settings", "site", "sources", "token",
+}
 _ERROR_RESPONSES = {
     401: {"model": HydraError},
     404: {"model": HydraError},
@@ -59,6 +66,10 @@ _SOURCE_RESPONSES = {
         "message/rfc822": {"schema": {"type": "string", "format": "binary"}},
     }},
 }
+
+
+class _JsonLdResponse(JSONResponse):
+    media_type = "application/ld+json"
 
 
 class _FixedWindowLimiter:
@@ -303,7 +314,10 @@ def register_public_routes(app: FastAPI) -> None:
     async def upstream_error(_request: Request, _exc: Exception):
         return _error(502, "Mail service error", "The mail service is unavailable")
 
-    @app.get("/domains", response_model=HydraDomains, response_model_exclude_none=True)
+    @app.get(
+        "/domains", response_model=HydraDomains, response_model_exclude_none=True,
+        response_class=_JsonLdResponse,
+    )
     def domains(request: Request, page: int = Query(1, ge=1)):
         members = []
         for domain in current_domains(request):
@@ -465,11 +479,41 @@ def create_app(config_path: str) -> FastAPI:
                 _set_security_headers(request, response)
                 return response
         response = await call_next(request)
+        if request.url.path.startswith("/assets/") and response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         _set_security_headers(request, response)
         return response
 
     register_public_routes(app)
     app.include_router(admin_router)
+
+    frontend_dist = Path(cfg.frontend_dist)
+    index_file = frontend_dist / "index.html"
+    app.mount("/assets", StaticFiles(directory=frontend_dist / "assets", check_dir=False), name="assets")
+
+    def spa_index():
+        if not index_file.is_file():
+            return PlainTextResponse("Frontend is not installed\n", status_code=503)
+        return FileResponse(index_file)
+
+    @app.get("/", include_in_schema=False)
+    def spa_home():
+        return spa_index()
+
+    @app.get("/admin", include_in_schema=False)
+    def spa_admin():
+        return spa_index()
+
+    @app.get("/{address}", include_in_schema=False)
+    def spa_address(address: str, request: Request):
+        try:
+            if address in _SPA_RESERVED:
+                raise AddressValidationError("Reserved route")
+            _address(request, address)
+        except AddressValidationError:
+            raise HTTPException(404, "Resource not found")
+        return spa_index()
+
     return app
 
 
@@ -492,3 +536,14 @@ def _set_security_headers(request: Request, response: Response) -> None:
         )
     else:
         response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
+
+
+def main() -> None:
+    config_path = os.environ.get("TMAIL_CONFIG", "/opt/tmail-policy/config.json")
+    app = create_app(config_path)
+    cfg = app.state.config_store.get()
+    uvicorn.run(app, host=cfg.api_listen_addr, port=cfg.api_listen_port)
+
+
+if __name__ == "__main__":
+    main()

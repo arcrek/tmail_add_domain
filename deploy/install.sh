@@ -5,27 +5,63 @@
 set -euo pipefail
 
 REMOTE_DIR="/opt/tmail-policy"
-SERVICE_FILE="deploy/tmail-policy.service"
+POLICY_SERVICE_FILE="deploy/tmail-policy.service"
+API_SERVICE_FILE="deploy/tmail-api.service"
 
 [ "$(id -u)" -eq 0 ] || { echo "ERROR: must be run as root (use sudo)"; exit 1; }
 [ -f config.json ] || { echo "ERROR: config.json not found. Copy config.example.json to config.json and fill in your API token first."; exit 1; }
-[ -f "$SERVICE_FILE" ] || { echo "ERROR: run from project root (deploy/tmail-policy.service not found)"; exit 1; }
+[ -f "$POLICY_SERVICE_FILE" ] || { echo "ERROR: run from project root (deploy/tmail-policy.service not found)"; exit 1; }
+[ -f "$API_SERVICE_FILE" ] || { echo "ERROR: deploy/tmail-api.service not found"; exit 1; }
 
 echo "==> Installing Python dependencies"
 pip3 install -r requirements.txt
 
+echo "==> Building frontend"
+npm --prefix frontend ci
+npm --prefix frontend run build
+
 echo "==> Creating directories"
-mkdir -p "$REMOTE_DIR/src" /var/lib/tmail-policy
+mkdir -p "$REMOTE_DIR/src" "$REMOTE_DIR/frontend/dist" /var/lib/tmail-policy
 
 echo "==> Copying source files"
-cp src/__init__.py src/config.py src/domain_cache.py src/mx_checker.py \
-   src/jmap_client.py src/policy_daemon.py src/email_janitor.py "$REMOTE_DIR/src/"
+cp src/*.py "$REMOTE_DIR/src/"
+cp -r frontend/dist/. "$REMOTE_DIR/frontend/dist/"
 
-echo "==> Copying config"
-cp config.json "$REMOTE_DIR/config.json"
+if [ -f "$REMOTE_DIR/config.json" ]; then
+    echo "==> Preserving existing production config"
+else
+    echo "==> Installing config"
+    cp config.json "$REMOTE_DIR/config.json"
+fi
+
+CONFIG_ERRORS=$(python3 - "$REMOTE_DIR/config.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as handle:
+    config = json.load(handle)
+secret = config.get("api_token_secret")
+password = config.get("admin_password")
+if not isinstance(secret, str) or len(secret) < 32:
+    print("api_token_secret")
+if not isinstance(password, str) or not password.strip():
+    print("admin_password")
+PY
+)
+if [ -n "$CONFIG_ERRORS" ]; then
+    if [[ "$CONFIG_ERRORS" == *api_token_secret* ]]; then
+        echo "ERROR: api_token_secret must contain at least 32 characters. Generate one with:"
+        echo "       python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
+    fi
+    if [[ "$CONFIG_ERRORS" == *admin_password* ]]; then
+        echo "ERROR: admin_password must not be empty."
+    fi
+    exit 1
+fi
 
 echo "==> Installing systemd units"
-cp "$SERVICE_FILE" /etc/systemd/system/tmail-policy.service
+cp "$POLICY_SERVICE_FILE" /etc/systemd/system/tmail-policy.service
+cp "$API_SERVICE_FILE" /etc/systemd/system/tmail-api.service
 cp deploy/tmail-janitor.service /etc/systemd/system/tmail-janitor.service
 cp deploy/tmail-janitor.timer /etc/systemd/system/tmail-janitor.timer
 
@@ -36,10 +72,11 @@ echo "==> Setting permissions"
 chown -R tmail-policy:tmail-policy "$REMOTE_DIR" /var/lib/tmail-policy
 chmod 600 "$REMOTE_DIR/config.json"
 
-echo "==> Enabling and starting policy daemon"
+echo "==> Enabling and starting services"
 systemctl daemon-reload
-systemctl enable tmail-policy
+systemctl enable tmail-policy tmail-api
 systemctl restart tmail-policy
+systemctl restart tmail-api
 
 echo "==> Enabling email janitor timer (runs daily at 03:00)"
 systemctl enable tmail-janitor.timer
@@ -47,6 +84,7 @@ systemctl start tmail-janitor.timer
 
 echo "==> Status"
 systemctl status tmail-policy --no-pager -l
+systemctl status tmail-api --no-pager -l
 
 # ── Postfix setup ──────────────────────────────────────────────────────────────
 
