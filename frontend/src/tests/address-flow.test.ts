@@ -9,13 +9,15 @@ import AddressPanel from '../components/AddressPanel.vue'
 const mocks = vi.hoisted(() => ({
   domains: vi.fn(),
   token: vi.fn(),
+  site: vi.fn(),
+  messages: vi.fn(),
 }))
 
 enableAutoUnmount(afterEach)
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
-  return { ...actual, api: { ...actual.api, domains: mocks.domains, token: mocks.token } }
+  return { ...actual, api: { ...actual.api, ...mocks } }
 })
 
 const domains = (values: string[]) => ({
@@ -32,6 +34,35 @@ describe('address flow', () => {
     history.replaceState({}, '', '/')
     mocks.domains.mockReset().mockResolvedValue(domains(['example.com']))
     mocks.token.mockReset().mockResolvedValue({ id: 'account-id', token: 'signed-token' })
+    mocks.site.mockReset().mockResolvedValue({
+      appName: 'tmail',
+      logoDataUrl: '',
+      faviconDataUrl: '',
+      primaryColor: '#45478f',
+      accentColor: '#34366f',
+      language: 'en',
+      cookieEnabled: false,
+      cookieText: '',
+      fetchSeconds: 20,
+      messageLimit: 100,
+      headerHtml: '<strong>Configured header</strong>',
+      footerHtml: '<small>Configured footer</small>',
+      contentCss: 'body { color: navy; }',
+      adSlots: { sidebar: '<script>window.adLoaded = true</script>' },
+    })
+    mocks.messages.mockReset().mockResolvedValue({
+      '@context': '/contexts/Message',
+      '@id': '/messages?page=1',
+      '@type': 'hydra:Collection',
+      'hydra:totalItems': 0,
+      'hydra:member': [],
+      'hydra:view': {
+        '@id': '/messages?page=1',
+        '@type': 'hydra:PartialCollectionView',
+        'hydra:first': '/messages?page=1',
+        'hydra:last': '/messages?page=1',
+      },
+    })
   })
 
   afterEach(() => vi.restoreAllMocks())
@@ -47,6 +78,20 @@ describe('address flow', () => {
     expect(JSON.parse(localStorage.getItem('tmail.addresses') ?? '[]')).toEqual([
       { address: 'box@example.com', token: 'signed-token' },
     ])
+  })
+
+  it('keeps configured site and ad HTML inside opaque sandbox frames', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+
+    expect(mocks.site).toHaveBeenCalledTimes(1)
+    const frames = wrapper.findAll('iframe.site-content-frame')
+    expect(frames).toHaveLength(3)
+    expect(frames[0]?.attributes('srcdoc')).toContain('<strong>Configured header</strong>')
+    expect(frames[2]?.attributes('srcdoc')).toContain('<small>Configured footer</small>')
+    expect(frames[1]?.attributes('sandbox')).toContain('allow-scripts')
+    expect(frames[1]?.attributes('sandbox')).not.toContain('allow-same-origin')
+    expect(wrapper.text()).not.toContain('Configured header')
   })
 
   it('opens a tokenized inbox when browser storage denies writes', async () => {

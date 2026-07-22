@@ -1,20 +1,26 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AddressPanel from './components/AddressPanel.vue'
+import InboxView from './components/InboxView.vue'
+import SandboxFrame from './components/SandboxFrame.vue'
 import { ApiError, api } from './api'
 import { parseRoute } from './route'
 import { loadSessions, saveSession } from './session'
-import type { AddressSession } from './types'
+import type { AddressSession, SiteResource } from './types'
 
 type View = 'address' | 'inbox' | 'admin'
 
 const initialRoute = parseRoute(window.location.pathname)
 const view = ref<View>(initialRoute.name === 'admin' ? 'admin' : 'address')
 const current = ref<AddressSession | null>(null)
+const site = ref<SiteResource | null>(null)
 const loading = ref(initialRoute.name === 'address')
 const error = ref('')
-const copied = ref(false)
 let navigationVersion = 0
+let siteVersion = 0
+
+const adSlots = computed(() => Object.entries(site.value?.adSlots ?? {})
+  .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1])))
 
 function openInbox(session: AddressSession, updatePath = true): void {
   current.value = session
@@ -34,7 +40,6 @@ async function reconcileRoute(): Promise<void> {
   const route = parseRoute(window.location.pathname)
   current.value = null
   error.value = ''
-  copied.value = false
   loading.value = false
 
   if (route.name === 'admin') {
@@ -75,13 +80,13 @@ function newAddress(): void {
   history.pushState({}, '', '/')
 }
 
-async function copyCurrent(): Promise<void> {
-  if (!current.value) return
+async function loadSite(): Promise<void> {
+  const version = ++siteVersion
   try {
-    await navigator.clipboard.writeText(current.value.address)
-    copied.value = true
+    const value = await api.site()
+    if (version === siteVersion) site.value = value
   } catch {
-    error.value = 'Copy failed. Select the address and copy it manually.'
+    // Site customization is optional; core mail remains available.
   }
 }
 
@@ -91,19 +96,29 @@ function handlePopState(): void {
 
 onMounted(() => {
   window.addEventListener('popstate', handlePopState)
+  void loadSite()
   void reconcileRoute()
 })
 
 onBeforeUnmount(() => {
   navigationVersion += 1
+  siteVersion += 1
   window.removeEventListener('popstate', handlePopState)
 })
 </script>
 
 <template>
   <div class="app-frame">
+    <SandboxFrame
+      v-if="site?.headerHtml"
+      class="site-content-frame site-header-frame"
+      :html="site.headerHtml"
+      :css="site.contentCss"
+      mode="content"
+      title="Configured site header"
+    />
     <header class="site-header">
-      <a class="brand" href="/" aria-label="Temporary Mail home">tmail</a>
+      <a class="brand" href="/" aria-label="Temporary Mail home">{{ site?.appName || 'tmail' }}</a>
       <nav aria-label="Site navigation">
         <a href="/docs">API docs</a>
         <a href="/admin">Admin</a>
@@ -111,30 +126,27 @@ onBeforeUnmount(() => {
     </header>
 
     <main>
+      <SandboxFrame
+        v-for="([name, html]) in adSlots"
+        :key="name"
+        class="site-content-frame ad-frame"
+        :html="html"
+        :css="site?.contentCss"
+        mode="content"
+        :title="`Configured ${name} content`"
+      />
       <section v-if="view === 'admin'" class="admin-placeholder" aria-labelledby="admin-title">
         <p class="eyebrow">Administration</p>
         <h1 id="admin-title">Admin access</h1>
         <p>The settings interface is being prepared.</p>
       </section>
 
-      <section v-else-if="view === 'inbox' && current" class="inbox-handoff" aria-labelledby="inbox-title">
-        <div>
-          <p class="eyebrow">Inbox ready</p>
-          <h1 id="inbox-title">{{ current.address }}</h1>
-          <p class="lede">Messages sent to this address will appear here.</p>
-        </div>
-        <div class="inbox-actions">
-          <button class="secondary-button" type="button" @click="copyCurrent">
-            {{ copied ? 'Copied' : 'Copy address' }}
-          </button>
-          <button class="primary-button" type="button" @click="newAddress">New address</button>
-        </div>
-        <p v-if="error" class="form-error inbox-error" aria-live="polite">{{ error }}</p>
-        <div class="inbox-empty">
-          <h2>Waiting for mail</h2>
-          <p>Keep this page open. The inbox view will refresh when messages arrive.</p>
-        </div>
-      </section>
+      <InboxView
+        v-else-if="view === 'inbox' && current"
+        :session="current"
+        :fetch-seconds="site?.fetchSeconds ?? 20"
+        @new-address="newAddress"
+      />
 
       <section v-else-if="loading" class="handoff-loading" aria-live="polite">
         <span class="skeleton skeleton-label" />
@@ -146,6 +158,14 @@ onBeforeUnmount(() => {
       <AddressPanel v-else :initial-error="error" @open="openCreatedInbox" />
     </main>
 
+    <SandboxFrame
+      v-if="site?.footerHtml"
+      class="site-content-frame site-footer-frame"
+      :html="site.footerHtml"
+      :css="site.contentCss"
+      mode="content"
+      title="Configured site footer"
+    />
     <footer class="site-footer">
       <span>Passwordless temporary mail</span>
       <a href="/docs">API reference</a>
