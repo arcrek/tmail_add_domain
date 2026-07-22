@@ -119,6 +119,7 @@ async function syncNow(): Promise<void> {
       const result = await api.admin.syncDomains(props.csrf)
       displayedDomains.value = [...result.domains]
       displayedSync.value = { ...result.lastSync }
+      displayedSuccessfulSync.value = { ...result.lastSync }
       emit('synced', result.domains, result.lastSync)
       status.value = `Sync complete. ${result.domains.length} active domains.`
     } catch (cause) {

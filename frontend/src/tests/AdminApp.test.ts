@@ -466,6 +466,11 @@ describe('administration frontend', () => {
 
     expect(wrapper.text()).toContain('post.example')
     expect(wrapper.text()).not.toContain('mail.example')
+    const lastSuccessfulSync = wrapper.findAll('.sync-summary dl > div').find(
+      (row) => row.get('dt').text() === 'Last successful sync',
+    )
+    expect(lastSuccessfulSync?.get('dd').text()).toContain('1 domain')
+    expect(lastSuccessfulSync?.get('dd').text()).not.toContain('2 domains')
     expect(wrapper.get('[role="alert"]').text()).toContain('synced, but settings refresh failed')
     expect(mocks.settings).toHaveBeenCalledTimes(1)
     expect(wrapper.emitted('synced')?.[0]).toEqual([[
