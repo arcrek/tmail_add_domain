@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AdminApp from '../admin/AdminApp.vue'
@@ -8,6 +10,8 @@ import DashboardTab from '../admin/DashboardTab.vue'
 import DomainsTab from '../admin/DomainsTab.vue'
 import GeneralTab from '../admin/GeneralTab.vue'
 import MailServerTab from '../admin/MailServerTab.vue'
+
+const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8')
 
 const mocks = vi.hoisted(() => ({
   login: vi.fn(),
@@ -125,6 +129,14 @@ describe('administration frontend', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('keeps the admin shell compact at the shared tablet breakpoint', () => {
+    expect(styles).not.toContain('@media (max-width: 900px)')
+    expect(styles).toMatch(/@media \(max-width: 952px\) \{[\s\S]*?\.admin-shell\.three-pane \{[\s\S]*?\.admin-content \{\s*grid-column: 2;/)
+    expect(styles).toMatch(/\.admin-section \{[^}]*padding: 0;/)
+    expect(styles).toMatch(/\.admin-section > h1,[^}]*font-size: clamp\(1\.6rem, 3vw, 2rem\);/)
+    expect(styles).toMatch(/\.admin-login-panel h1 \{[^}]*font-size: clamp\(1\.6rem, 3vw, 2rem\);/)
   })
 
   it('logs in without persisting the password and exposes tabs in the required order', async () => {
