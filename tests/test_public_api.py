@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 from types import SimpleNamespace
 import threading
@@ -502,6 +503,24 @@ def test_sandbox_document_has_isolated_inline_policy_and_bootstrap(client):
     assert "script-src 'unsafe-inline' https:" not in csp
     assert "connect-src" not in csp
     assert "tmail:sandbox-content" in response.text
+
+
+def test_message_sandbox_allows_email_styles_but_only_its_nonce_script(client):
+    first = client.get("/message-sandbox")
+    second = client.get("/message-sandbox")
+    csp = first.headers["content-security-policy"]
+    nonce = re.search(r"script-src 'nonce-([^']+)'", csp).group(1)
+
+    assert first.status_code == 200
+    assert first.headers["x-frame-options"] == "SAMEORIGIN"
+    assert f'nonce="{nonce}"' in first.text
+    assert first.text != second.text
+    assert "style-src 'unsafe-inline'" in csp
+    assert "img-src data: https: http:" in csp
+    assert "form-action 'none'" in csp
+    assert "object-src 'none'" in csp
+    assert "script-src 'unsafe-inline'" not in csp
+    assert "allow-same-origin" not in first.text
 
 
 def test_redoc_csp_allows_only_generated_redoc_assets(client):

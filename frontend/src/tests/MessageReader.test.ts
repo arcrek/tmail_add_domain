@@ -107,9 +107,10 @@ describe('MessageReader', () => {
 
     expect(mocks.message).toHaveBeenCalledWith('signed', 'one')
     expect(mocks.setSeen).toHaveBeenCalledWith('signed', 'one', true)
-    expect(wrapper.get('iframe').attributes('sandbox')).not.toContain('allow-scripts')
-    expect(wrapper.get('iframe').attributes('src')).toBeUndefined()
-    expect(wrapper.get('iframe').attributes('srcdoc')).toContain('<p>HTML body</p>')
+    expect(wrapper.get('iframe').attributes('sandbox')).toContain('allow-scripts')
+    expect(wrapper.get('iframe').attributes('sandbox')).not.toContain('allow-same-origin')
+    expect(wrapper.get('iframe').attributes('src')).toBe('/message-sandbox?revision=0')
+    expect(wrapper.get('iframe').attributes('srcdoc')).toBeUndefined()
   })
 
   it('downloads attachments and source through the authenticated API', async () => {

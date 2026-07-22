@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import secrets
 import threading
 import time
 from urllib.parse import quote
@@ -89,6 +90,31 @@ addEventListener("message", (event) => {
 </script>
 </body></html>
 """
+
+
+def _message_sandbox(nonce: str) -> str:
+    return f'''<!doctype html>
+<html><head><meta charset="utf-8"><title>Message content</title></head><body>
+<script nonce="{nonce}">
+"use strict";
+addEventListener("message", (event) => {{
+  const value = event.data;
+  if (event.source !== parent || !value || value.type !== "tmail:sandbox-content") return;
+  if (value.mode !== "message" || typeof value.html !== "string") return;
+  document.open();
+  document.write('<!doctype html><html><head><meta charset="utf-8">');
+  document.write('<meta name="viewport" content="width=device-width,initial-scale=1">');
+  document.write('<style>html,body{{margin:0;padding:0;max-width:100%;overflow-wrap:anywhere}}body{{padding:16px}}img{{max-width:100%;height:auto}}table{{max-width:100%}}</style>');
+  document.write('</head><body>');
+  document.write(value.html);
+  document.write('</body></html>');
+  document.close();
+  for (const link of document.links) {{
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+  }}
+}}, {{once: true}});
+</script></body></html>'''
 
 
 class _BodyLimitMiddleware:
@@ -641,6 +667,19 @@ def create_app(config_path: str) -> FastAPI:
     def sandbox_document():
         return HTMLResponse(_SANDBOX_DOCUMENT)
 
+    @app.get("/message-sandbox", include_in_schema=False, response_class=HTMLResponse)
+    def message_sandbox_document():
+        nonce = secrets.token_urlsafe(24)
+        response = HTMLResponse(_message_sandbox(nonce))
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; "
+            f"script-src 'nonce-{nonce}'; "
+            "style-src 'unsafe-inline'; img-src data: https: http:; "
+            "font-src data: https: http:; connect-src 'none'; frame-src 'none'; "
+            "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+        )
+        return response
+
     @app.get("/{address}", include_in_schema=False)
     def spa_address(address: str, request: Request):
         if address in _POST_ONLY_ROUTES:
@@ -660,11 +699,18 @@ def create_app(config_path: str) -> FastAPI:
 def _set_security_headers(request: Request, response: Response) -> None:
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["X-Frame-Options"] = "SAMEORIGIN" if request.url.path == "/sandbox" else "DENY"
+    response.headers["X-Frame-Options"] = (
+        "SAMEORIGIN" if request.url.path in {"/sandbox", "/message-sandbox"} else "DENY"
+    )
     if request.url.path == "/sandbox":
         response.headers["Content-Security-Policy"] = (
             "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
             "img-src data: https: http:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+        )
+    elif request.url.path == "/message-sandbox":
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'none'; frame-ancestors 'self'",
         )
     elif request.url.path == "/docs":
         response.headers["Content-Security-Policy"] = (

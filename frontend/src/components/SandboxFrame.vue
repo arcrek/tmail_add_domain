@@ -11,16 +11,12 @@ const props = withDefaults(defineProps<{
   title: '',
 })
 
-const sandbox = computed(() => props.mode === 'message'
-  ? 'allow-popups allow-popups-to-escape-sandbox'
-  : 'allow-scripts allow-popups allow-popups-to-escape-sandbox')
+const sandbox = computed(() => 'allow-scripts allow-popups allow-popups-to-escape-sandbox')
 
 const frame = ref<HTMLIFrameElement | null>(null)
 const revision = ref(0)
-const sourceUrl = computed(() => `/sandbox?revision=${revision.value}`)
-const messageSource = computed(() => props.mode === 'message'
-  ? `<base target="_blank">${props.html}`
-  : undefined)
+let sentMessageRevision = -1
+const sourceUrl = computed(() => `${props.mode === 'message' ? '/message-sandbox' : '/sandbox'}?revision=${revision.value}`)
 
 watch(
   () => [props.html, props.css, props.mode] as const,
@@ -28,8 +24,10 @@ watch(
 )
 
 function sendContent(): void {
-  if (props.mode !== 'content') return
-  frame.value?.contentWindow?.postMessage({
+  const target = frame.value?.contentWindow
+  if (!target || (props.mode === 'message' && sentMessageRevision === revision.value)) return
+  if (props.mode === 'message') sentMessageRevision = revision.value
+  target.postMessage({
     type: 'tmail:sandbox-content',
     html: props.html,
     css: props.css,
@@ -44,8 +42,7 @@ function sendContent(): void {
     ref="frame"
     class="sandbox-frame"
     :sandbox="sandbox"
-    :src="mode === 'content' ? sourceUrl : undefined"
-    :srcdoc="messageSource"
+    :src="sourceUrl"
     :title="title || (mode === 'message' ? 'Message content' : 'Site content')"
     @load="sendContent"
   />
