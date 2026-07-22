@@ -77,6 +77,7 @@ The API follows the resource names and JSON shapes documented by Mail.tm at <htt
 ```text
 GET    /domains
 GET    /domains/{id}
+GET    /site
 POST   /accounts
 POST   /token
 GET    /me
@@ -87,6 +88,8 @@ DELETE /messages/{id}
 GET    /messages/{id}/attachments/{blob_id}
 GET    /sources/{id}
 ```
+
+`GET /site` returns only public presentation and inbox behavior settings: application name, logo/favicon data, colors, language, cookie notice, polling interval, message limit, and sandboxed HTML/ad blocks. It never returns admin, JMAP, signing, filesystem, or service configuration.
 
 ### Interactive API Documentation
 
