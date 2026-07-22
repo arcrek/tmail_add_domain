@@ -1,4 +1,7 @@
 from __future__ import annotations
+import builtins
+import errno
+import fcntl
 import json
 import multiprocessing
 import os
@@ -98,6 +101,78 @@ def test_contains_unchanged_generation_avoids_file_lock(tmp_path, monkeypatch):
 
     assert cache.contains("cached.example")
     flock.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["directory", "open", "flock-acquire", "flock-release"])
+def test_refresh_lock_failures_retain_generation_and_retry(
+    tmp_path, monkeypatch, failure
+):
+    path = tmp_path / "domains.json"
+    path.write_text('["old.example"]')
+    cache = DomainCache(str(path))
+    cache.load()
+    previous_generation = cache._generation
+    authoritative = DomainCache(str(path))
+    authoritative.load()
+    authoritative.replace(["new.example"])
+
+    with monkeypatch.context() as scoped:
+        if failure == "directory":
+            scoped.setattr(
+                "src.domain_cache.os.makedirs",
+                MagicMock(side_effect=OSError(errno.EROFS, "read-only filesystem")),
+            )
+        elif failure == "open":
+            original_open = builtins.open
+
+            def failing_open(filename, *args, **kwargs):
+                if os.fspath(filename) == cache._lock_file:
+                    raise PermissionError(errno.EACCES, "lock denied")
+                return original_open(filename, *args, **kwargs)
+
+            scoped.setattr("builtins.open", failing_open)
+        else:
+            failed_operation = fcntl.LOCK_EX if failure == "flock-acquire" else fcntl.LOCK_UN
+
+            def failing_flock(_handle, operation):
+                if operation == failed_operation:
+                    raise OSError(errno.EROFS, "lock unavailable")
+
+            scoped.setattr("src.domain_cache.fcntl.flock", failing_flock)
+
+        assert cache.contains("old.example")
+        assert not cache.contains("new.example")
+        assert cache.domains() == ["old.example"]
+        assert cache._generation == previous_generation
+
+    assert cache.contains("new.example")
+    assert not cache.contains("old.example")
+    assert cache._generation != previous_generation
+
+
+@pytest.mark.parametrize("operation", ["generation", "add", "add_many", "replace"])
+def test_writer_lock_failures_still_propagate(tmp_path, monkeypatch, operation):
+    path = tmp_path / "domains.json"
+    path.write_text('["old.example"]')
+    cache = DomainCache(str(path))
+    cache.load()
+    monkeypatch.setattr(
+        "src.domain_cache.fcntl.flock",
+        MagicMock(side_effect=OSError(errno.EROFS, "lock unavailable")),
+    )
+
+    with pytest.raises(OSError, match="lock unavailable"):
+        if operation == "generation":
+            cache.generation()
+        elif operation == "add":
+            cache.add("new.example")
+        elif operation == "add_many":
+            cache.add_many(["new.example"])
+        else:
+            cache.replace(["new.example"])
+
+    assert cache.domains() == ["old.example"]
+    assert json.loads(path.read_text()) == ["old.example"]
 
 def test_no_tmp_file_left_after_write(tmp_path):
     path = str(tmp_path / "domains.json")

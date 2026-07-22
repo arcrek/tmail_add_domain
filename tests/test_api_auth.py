@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import MagicMock
 
 from src.api_auth import AddressToken, AddressValidationError, active_domains, normalize_address
 from src.api_state import StateStore
@@ -42,3 +43,25 @@ def test_auto_sync_reuses_last_valid_long_lived_cache_snapshot(tmp_path):
     path.write_text("corrupt")
 
     assert active_domains(cache, state) == ["live.example"]
+
+
+def test_auto_sync_retains_snapshot_when_refresh_lock_fails_then_retries(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "domains.json"
+    path.write_text('["old.example"]')
+    cache = DomainCache(str(path))
+    cache.load()
+    state = StateStore(str(tmp_path / "state.db"))
+    authoritative = DomainCache(str(path))
+    authoritative.load()
+    authoritative.replace(["new.example"])
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            "src.domain_cache.fcntl.flock",
+            MagicMock(side_effect=PermissionError("lock denied")),
+        )
+        assert active_domains(cache, state) == ["old.example"]
+
+    assert active_domains(cache, state) == ["new.example"]
