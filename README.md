@@ -108,11 +108,15 @@ docker compose down -v
 ```
 
 Keep the default loopback bind and put an HTTPS reverse proxy in front of it.
-Enable trusted forwarding so the app retains per-client rate limits:
+For a sanitizing loopback proxy, store trusted forwarding in the repository
+`.env` so later Compose commands retain it:
 
-```bash
-TMAIL_TRUST_FORWARD_HEADERS=on docker compose up -d
+```dotenv
+TMAIL_TRUST_FORWARD_HEADERS=on
 ```
+
+Then run `docker compose up -d`. Alternatively, export the variable
+consistently before every Compose lifecycle command.
 
 The outer proxy must overwrite client-supplied `Host`, `X-Forwarded-For`, and
 `X-Forwarded-Proto` headers. Never enable trusted forwarding for direct public
