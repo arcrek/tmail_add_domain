@@ -69,6 +69,48 @@ npm run build
 
 The API serves the resulting `frontend/dist`; a missing build returns plain HTTP 503 for SPA routes while API and documentation routes remain available.
 
+## Docker Compose
+
+Create and secure `config.json` as described above. For container deployment,
+keep `cache_file` and `state_db` under `/var/lib/tmail-policy`.
+
+Build and start the frontend and API:
+
+```bash
+docker compose up -d --build
+```
+
+The frontend is available at `http://127.0.0.1:8080`. Change the published
+port without editing Compose:
+
+```bash
+TMAIL_HTTP_PORT=8088 docker compose up -d
+```
+
+Inspect or stop the deployment:
+
+```bash
+docker compose ps
+docker compose logs -f
+docker compose down
+```
+
+The first start copies `config.json` into the `tmail-data` volume. Later
+starts preserve that runtime copy so administrator changes survive rebuilds.
+Changing the repository `config.json` does not overwrite an existing runtime
+copy.
+
+To intentionally erase runtime settings, cached domains, and mail-activity
+metrics, stop the deployment and remove its volume:
+
+```bash
+docker compose down -v
+```
+
+Put an HTTPS reverse proxy in front of the published frontend port. The API is
+not published separately; API docs remain available at `/docs` through the
+frontend endpoint.
+
 ## Production installation
 
 From a checkout containing `config.json`:

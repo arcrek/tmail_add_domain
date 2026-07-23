@@ -1,0 +1,31 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      TMAIL_CONFIG: /var/lib/tmail-policy/config.json
+      TMAIL_CONFIG_SEED: /run/tmail/config.json
+      TMAIL_API_HOST: 0.0.0.0
+      TMAIL_API_PORT: "8000"
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      - tmail-data:/var/lib/tmail-policy
+      - ./config.json:/run/tmail/config.json:ro
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${TMAIL_HTTP_BIND:-127.0.0.1}:${TMAIL_HTTP_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  tmail-data:

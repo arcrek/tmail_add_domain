@@ -1,0 +1,29 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir -r requirements.txt \
+    && groupadd --gid 10001 tmail \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin tmail \
+    && install -d -o tmail -g tmail -m 0700 /var/lib/tmail-policy
+
+COPY src ./src
+COPY docker/api-entrypoint.sh /usr/local/bin/tmail-api-entrypoint
+RUN chmod 0755 /usr/local/bin/tmail-api-entrypoint
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/site', timeout=2).read()"]
+
+ENTRYPOINT ["tmail-api-entrypoint"]
+CMD ["python", "-m", "src.api_server"]
