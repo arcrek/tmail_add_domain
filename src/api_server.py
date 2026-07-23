@@ -741,7 +741,9 @@ def main() -> None:
     config_path = os.environ.get("TMAIL_CONFIG", "/var/lib/tmail-policy/config.json")
     app = create_app(config_path)
     cfg = app.state.config_store.get()
-    uvicorn.run(app, host=cfg.api_listen_addr, port=cfg.api_listen_port)
+    host = os.environ.get("TMAIL_API_HOST", cfg.api_listen_addr)
+    port = int(os.environ.get("TMAIL_API_PORT", cfg.api_listen_port))
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

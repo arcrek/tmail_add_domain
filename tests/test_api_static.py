@@ -105,6 +105,21 @@ def test_main_uses_environment_config_and_api_bind(config_path, monkeypatch):
     assert called["app"].state.config_store.path == str(config_path)
 
 
+def test_main_allows_container_bind_overrides(config_path, monkeypatch):
+    called = {}
+    monkeypatch.setenv("TMAIL_CONFIG", str(config_path))
+    monkeypatch.setenv("TMAIL_API_HOST", "0.0.0.0")
+    monkeypatch.setenv("TMAIL_API_PORT", "8000")
+    monkeypatch.setattr(api_server.uvicorn, "run", lambda app, host, port: called.update(
+        app=app, host=host, port=port
+    ))
+
+    api_server.main()
+
+    assert called["host"] == "0.0.0.0"
+    assert called["port"] == 8000
+
+
 @pytest.mark.parametrize(("secret", "password", "field"), [
     ("replace-with-32-or-more-random-characters", "admin-secret", "api_token_secret"),
     (" " + "s" * 31 + " ", "admin-secret", "api_token_secret"),
