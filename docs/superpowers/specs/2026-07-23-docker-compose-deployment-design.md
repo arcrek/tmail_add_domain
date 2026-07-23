@@ -38,9 +38,10 @@ The `api` service uses a slim Python image, installs only
 `TMAIL_API_HOST=0.0.0.0` and `TMAIL_API_PORT=8000` so an existing
 configuration with `api_listen_addr` set to `127.0.0.1` remains usable.
 
-Only the frontend port is published as `${TMAIL_HTTP_PORT:-8080}:80`. The API
-port is available only on the Compose network. Nginx forwards the original
-host and client forwarding headers.
+Only the frontend port is published as
+`${TMAIL_HTTP_BIND:-127.0.0.1}:${TMAIL_HTTP_PORT:-8080}:80`. The API port is
+available only on the Compose network. Nginx forwards the original host and
+client forwarding headers.
 
 ## Configuration and Persistence
 
@@ -48,6 +49,10 @@ The required repository `config.json` is mounted read-only as an initial
 seed. On the first start, the API entrypoint copies it to
 `/var/lib/tmail-policy/config.json` inside the `tmail-data` named volume.
 Later starts retain the volume copy.
+
+The entrypoint starts with only enough privilege to read a host `config.json`
+kept at mode `0600`, seed and set ownership on the runtime volume, and then
+permanently drops to the unprivileged `tmail` user before starting Python.
 
 This copy is necessary because administrator updates atomically replace the
 runtime configuration file; Docker cannot replace a single bind-mounted
