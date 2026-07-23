@@ -49,10 +49,12 @@ def test_compose_exposes_only_frontend_and_persists_runtime():
     assert "tmail-data:/var/lib/tmail-policy" in compose
     assert "./config.json:/run/tmail/config.json:ro" in compose
     assert "8000:8000" not in compose
+    assert "TMAIL_TRUST_FORWARD_HEADERS: ${TMAIL_TRUST_FORWARD_HEADERS:-off}" in compose
+    assert 'NGINX_ENVSUBST_FILTER: "^TMAIL_TRUST_FORWARD_HEADERS$$"' in compose
 
 
 def test_nginx_keeps_spa_and_backend_routes_same_origin():
-    nginx = (ROOT / "docker/nginx.conf").read_text()
+    nginx = (ROOT / "docker/nginx.conf.template").read_text()
 
     assert "try_files $uri /index.html;" in nginx
     assert "proxy_pass http://api:8000;" in nginx
@@ -65,20 +67,22 @@ def test_nginx_keeps_spa_and_backend_routes_same_origin():
 
 
 def test_nginx_preserves_https_without_trusting_client_ip_headers():
-    nginx = (ROOT / "docker/nginx.conf").read_text()
+    nginx = (ROOT / "docker/nginx.conf.template").read_text()
 
-    assert "map $http_x_forwarded_proto $tmail_forwarded_proto" in nginx
+    assert 'map "${TMAIL_TRUST_FORWARD_HEADERS}:$http_x_forwarded_for" $tmail_forwarded_for' in nginx
+    assert '"~^on:(.+)$" $1;' in nginx
+    assert 'map "${TMAIL_TRUST_FORWARD_HEADERS}:$http_x_forwarded_proto" $tmail_forwarded_proto' in nginx
     assert "default $scheme;" in nginx
-    assert "http http;" in nginx
-    assert "https https;" in nginx
+    assert '"on:http" http;' in nginx
+    assert '"on:https" https;' in nginx
     assert "proxy_set_header Host $http_host;" in nginx
-    assert "proxy_set_header X-Forwarded-For $remote_addr;" in nginx
+    assert "proxy_set_header X-Forwarded-For $tmail_forwarded_for;" in nginx
     assert "proxy_set_header X-Forwarded-Proto $tmail_forwarded_proto;" in nginx
     assert "$proxy_add_x_forwarded_for" not in nginx
 
 
 def test_nginx_adds_spa_security_headers():
-    nginx = (ROOT / "docker/nginx.conf").read_text()
+    nginx = (ROOT / "docker/nginx.conf.template").read_text()
 
     for header in (
         'Content-Security-Policy "default-src \'self\'; img-src \'self\' data:; '
@@ -101,4 +105,5 @@ def test_images_build_without_copying_runtime_secrets():
     assert "npm ci" in frontend
     assert "npm run build" in frontend
     assert "FROM nginx:1.30.4-alpine" in frontend
+    assert "COPY docker/nginx.conf.template /etc/nginx/templates/default.conf.template" in frontend
     assert "config.json" in ignored

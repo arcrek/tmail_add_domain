@@ -108,14 +108,21 @@ docker compose down -v
 ```
 
 Keep the default loopback bind and put an HTTPS reverse proxy in front of it.
+Enable trusted forwarding so the app retains per-client rate limits:
+
+```bash
+TMAIL_TRUST_FORWARD_HEADERS=on docker compose up -d
+```
+
 The outer proxy must overwrite client-supplied `Host`, `X-Forwarded-For`, and
-`X-Forwarded-Proto` headers. The Compose frontend accepts only `http` or
-`https` as the forwarded scheme and replaces `X-Forwarded-For` with its direct
-peer, so per-client IP rate limiting behind an outer proxy is that proxy's
-responsibility. Setting `TMAIL_HTTP_BIND=0.0.0.0` exposes the frontend directly
-and should be done only when another network boundary protects it. The API is
-not published separately; API docs remain available at `/docs` through the
-frontend endpoint.
+`X-Forwarded-Proto` headers. Never enable trusted forwarding for direct public
+exposure or behind a proxy that does not sanitize those headers. The Compose
+frontend accepts only `http` or `https` as the forwarded scheme. With trusted
+forwarding off, it replaces the client address with its direct peer.
+
+Setting `TMAIL_HTTP_BIND=0.0.0.0` exposes the frontend directly and should be
+done only when another network boundary protects it. The API is not published
+separately; API docs remain available at `/docs` through the frontend endpoint.
 
 `jmap_url` is resolved from inside the API container. In particular,
 `127.0.0.1` points to that container, not the Docker host; use a Stalwart

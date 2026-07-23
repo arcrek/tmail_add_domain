@@ -20,6 +20,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+    environment:
+      TMAIL_TRUST_FORWARD_HEADERS: ${TMAIL_TRUST_FORWARD_HEADERS:-off}
+      NGINX_ENVSUBST_FILTER: "^TMAIL_TRUST_FORWARD_HEADERS$$"
     depends_on:
       api:
         condition: service_healthy

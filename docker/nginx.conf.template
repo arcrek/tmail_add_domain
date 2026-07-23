@@ -1,7 +1,12 @@
-map $http_x_forwarded_proto $tmail_forwarded_proto {
+map "${TMAIL_TRUST_FORWARD_HEADERS}:$http_x_forwarded_for" $tmail_forwarded_for {
+    default $remote_addr;
+    "~^on:(.+)$" $1;
+}
+
+map "${TMAIL_TRUST_FORWARD_HEADERS}:$http_x_forwarded_proto" $tmail_forwarded_proto {
     default $scheme;
-    http http;
-    https https;
+    "on:http" http;
+    "on:https" https;
 }
 
 server {
@@ -21,7 +26,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-For $tmail_forwarded_for;
         proxy_set_header X-Forwarded-Proto $tmail_forwarded_proto;
     }
 
