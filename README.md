@@ -81,7 +81,7 @@ docker compose up -d --build
 ```
 
 The frontend is available at `http://127.0.0.1:8080`. Change the published
-port without editing Compose:
+port if `8080` is already in use:
 
 ```bash
 TMAIL_HTTP_PORT=8088 docker compose up -d
@@ -107,9 +107,19 @@ metrics, stop the deployment and remove its volume:
 docker compose down -v
 ```
 
-Put an HTTPS reverse proxy in front of the published frontend port. The API is
+Keep the default loopback bind and put an HTTPS reverse proxy in front of it.
+The outer proxy must overwrite client-supplied `Host`, `X-Forwarded-For`, and
+`X-Forwarded-Proto` headers. The Compose frontend accepts only `http` or
+`https` as the forwarded scheme and replaces `X-Forwarded-For` with its direct
+peer, so per-client IP rate limiting behind an outer proxy is that proxy's
+responsibility. Setting `TMAIL_HTTP_BIND=0.0.0.0` exposes the frontend directly
+and should be done only when another network boundary protects it. The API is
 not published separately; API docs remain available at `/docs` through the
 frontend endpoint.
+
+`jmap_url` is resolved from inside the API container. In particular,
+`127.0.0.1` points to that container, not the Docker host; use a Stalwart
+hostname or address reachable from the container.
 
 ## Production installation
 

@@ -64,6 +64,32 @@ def test_nginx_keeps_spa_and_backend_routes_same_origin():
         assert route in nginx
 
 
+def test_nginx_preserves_https_without_trusting_client_ip_headers():
+    nginx = (ROOT / "docker/nginx.conf").read_text()
+
+    assert "map $http_x_forwarded_proto $tmail_forwarded_proto" in nginx
+    assert "default $scheme;" in nginx
+    assert "http http;" in nginx
+    assert "https https;" in nginx
+    assert "proxy_set_header Host $http_host;" in nginx
+    assert "proxy_set_header X-Forwarded-For $remote_addr;" in nginx
+    assert "proxy_set_header X-Forwarded-Proto $tmail_forwarded_proto;" in nginx
+    assert "$proxy_add_x_forwarded_for" not in nginx
+
+
+def test_nginx_adds_spa_security_headers():
+    nginx = (ROOT / "docker/nginx.conf").read_text()
+
+    for header in (
+        'Content-Security-Policy "default-src \'self\'; img-src \'self\' data:; '
+        'frame-src \'self\'; frame-ancestors \'none\'" always;',
+        'X-Frame-Options "DENY" always;',
+        'X-Content-Type-Options "nosniff" always;',
+        'Referrer-Policy "no-referrer" always;',
+    ):
+        assert f"add_header {header}" in nginx
+
+
 def test_images_build_without_copying_runtime_secrets():
     api = (ROOT / "Dockerfile.api").read_text()
     frontend = (ROOT / "Dockerfile.frontend").read_text()
@@ -74,4 +100,5 @@ def test_images_build_without_copying_runtime_secrets():
     assert "requirements-dev.txt" not in api
     assert "npm ci" in frontend
     assert "npm run build" in frontend
+    assert "FROM nginx:1.30.4-alpine" in frontend
     assert "config.json" in ignored
